@@ -1,6 +1,6 @@
 # 安装、升级与恢复
 
-本次产物为 0.7.4-preview，versionCode 12。应用包名为 app.fuckpo0jixian（旧名「白名单随行」为 app.allowmate，两者是不同应用，不能互相覆盖；迁移需重新添加 Token 与槽位，再卸载旧应用和旧模块）。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
+本次产物为 0.7.5-preview，versionCode 13。应用包名为 app.fuckpo0jixian（旧名「白名单随行」为 app.allowmate，两者是不同应用，不能互相覆盖；迁移需重新添加 Token 与槽位，再卸载旧应用和旧模块）。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
 
 ## 安装
 
@@ -18,7 +18,7 @@
 
 标准模式无需 root。可选模块 ZIP 绑定同次构建的 APK 签名，兼容 APK versionCode 7；APK 与模块须同时更新，旧版模块会显示版本不匹配并降级为标准模式。模块协议仍为 1，没有 Wi-Fi 授权、token 或白名单决策。不要把握手等同于成功请求或业务连通。
 
-需要安装时使用同次产物 FuckPo0JiXian-Runtime-0.7.4-preview.zip。模块详细边界见 [说明](../module/README.md)。
+需要安装时使用同次产物 FuckPo0JiXian-Runtime-0.7.5-preview.zip。模块详细边界见 [说明](../module/README.md)。
 
 ## 测试与停止
 

@@ -24,9 +24,16 @@ import javax.net.ssl.SSLSocketFactory
  * Names are resolved the same way, against domestic public DNS, so a TUN's fake-IP DNS cannot redirect them.
  * DNS-over-HTTPS comes first: a TUN with strict routing (Windows WFP) drops port 53 outside the tunnel, but not 443.
  * Minimal on purpose: GET/POST without body, no redirects, no cookies, 256 KB cap, certificate and host checked.
+ *
+ * [allowTunnel] is for Po0 only. Under some Windows TUNs a pinned TCP connection opens but never gets data back;
+ * a GET may then go the system route instead (through the TUN). That is safe because a write still needs Po0's view
+ * of the exit to equal the STUN result taken directly, so a proxied Po0 request can never be written. A POST is never
+ * retried on another route: it takes the route the GETs of this check already proved.
  */
-class BoundTransport(private val localIp: String) : Transport {
+class BoundTransport(private val localIp: String, private val allowTunnel: Boolean = false) : Transport {
     private val local = InetAddress.getByName(localIp)
+    /** The route the GETs of this transport (one check) succeeded on. */
+    @Volatile private var proven: Boolean? = null
 
     override suspend fun execute(method: String, url: String): HttpReply = withContext(Dispatchers.IO) {
         val uri = URI(url)
@@ -34,24 +41,37 @@ class BoundTransport(private val localIp: String) : Transport {
         val host = uri.host
         val port = if (uri.port == -1) 443 else uri.port
         val path = (uri.rawPath?.ifEmpty { "/" } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
-        fetch(resolve(host), host, port, method, path)
+        val address = resolve(host)
+        if (!allowTunnel) return@withContext fetch(address, host, port, method, path, direct = true)
+        if (method != "GET") return@withContext fetch(address, host, port, method, path, direct = proven ?: true)
+        // Start with what worked last time on this interface, so a stalled direct route costs its timeout only once.
+        val first = proven ?: (tunnelPreferred[localIp]?.let { System.currentTimeMillis() - it < TUNNEL_MEMORY_MS } != true)
+        val reply = try { fetch(address, host, port, method, path, direct = first).also { proven = first } }
+        catch (e: ApiFailure) {
+            if (e.code !in setOf("NETWORK_CONNECT_FAILED", "NETWORK_TLS_OR_RESPONSE_ERROR")) throw e
+            fetch(address, host, port, method, path, direct = !first).also { proven = !first }
+        }
+        if (proven == false) tunnelPreferred[localIp] = System.currentTimeMillis() else tunnelPreferred.remove(localIp)
+        reply
     }
 
-    private suspend fun fetch(address: InetAddress, host: String, port: Int, method: String, path: String): HttpReply {
+    private suspend fun fetch(address: InetAddress, host: String, port: Int, method: String, path: String, direct: Boolean = true): HttpReply {
         requests.incrementAndGet()
         val raw = SocketChannel.open().socket()
         // Closing the socket is the only way to interrupt a blocking read when the check is cancelled.
         val closer = currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { raw.close() } }
         var stage = "connect"
-        var pinned = false
+        val route = if (direct) "direct" else "tunnel"
         try {
             try {
-                pinned = Egress.pin(raw.channel, local)
-                raw.bind(InetSocketAddress(local, 0))
+                if (direct) {
+                    if (!Egress.pin(raw.channel, local)) record(host, "$route unpinned", null, null)
+                    raw.bind(InetSocketAddress(local, 0))
+                }
                 raw.connect(InetSocketAddress(address, port), 10_000)
-            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; note(host, stage, pinned, e); throw ApiFailure("NETWORK_CONNECT_FAILED") }
+            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; record(host, "$route $stage", method, e); throw ApiFailure("NETWORK_CONNECT_FAILED") }
             raw.soTimeout = 10_000
-            if (raw.localAddress != local) throw ApiFailure("NETWORK_CONNECT_FAILED")
+            if (direct && raw.localAddress != local) throw ApiFailure("NETWORK_CONNECT_FAILED")
             stage = "tls"
             val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, port, true) as SSLSocket
             tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
@@ -61,10 +81,10 @@ class BoundTransport(private val localIp: String) : Transport {
                 val request = "$method $path HTTP/1.1\r\nHost: $host\r\nAccept: application/json\r\nUser-Agent: FuckPo0JiXian\r\n" +
                     (if (method == "POST") "Content-Length: 0\r\n" else "") + "Connection: close\r\n\r\n"
                 socket.outputStream.apply { write(request.toByteArray(Charsets.US_ASCII)); flush() }
-                parse(socket.inputStream).also { note(host, "ok", pinned, null) }
+                parse(socket.inputStream).also { record(host, "$route ok", method, null) }
             }
         } catch (e: ApiFailure) { throw e }
-        catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; note(host, stage, pinned, e); throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR") }
+        catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; record(host, "$route $stage", method, e); throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR") }
         finally { closer?.dispose(); runCatching { raw.close() } }
     }
 
@@ -72,28 +92,24 @@ class BoundTransport(private val localIp: String) : Transport {
         if (host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) return InetAddress.getByName(host)
         val now = System.currentTimeMillis()
         resolved[host]?.takeIf { it.localIp == localIp && now - it.time < CACHE_MS }?.let { return it.address }
-        var via = "doh"
-        val address = dohServers.firstNotNullOfOrNull { server ->
-            runCatching { Dns.parseJson(fetch(InetAddress.getByName(server), server, 443, "GET", "/resolve?name=$host&type=1").body) }
-                .getOrNull()?.firstOrNull { !fakeIp(it) }
-        } ?: udpServers.firstNotNullOfOrNull { server -> via = "udp"; runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
+        // UDP first: it fails in 3 s where it is blocked, while DoH over a stalled TCP route waits 10 s per server.
+        var via = "udp"
+        val address = udpServers.firstNotNullOfOrNull { server -> runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
+            ?: dohServers.firstNotNullOfOrNull { server ->
+                via = "doh"
+                runCatching { Dns.parseJson(fetch(InetAddress.getByName(server), server, 443, "GET", "/resolve?name=$host&type=1").body) }
+                    .getOrNull()?.firstOrNull { !fakeIp(it) }
+            }
             // Last resort: the system resolver, unless it answers with a TUN's fake address.
             ?: run { via = "system"; runCatching { InetAddress.getAllByName(host) }.getOrDefault(emptyArray()).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) } }
-            ?: run { note(host, "dns", false, null); throw ApiFailure("NETWORK_DNS_FAILED") }
-        note(host, "dns-$via", false, null)
+            ?: run { record(host, "dns failed", null, null); throw ApiFailure("NETWORK_DNS_FAILED") }
+        record(host, "dns $via", null, null)
         resolved[host] = Resolved(address, localIp, now)
         return address
     }
-    private fun fakeIp(a: InetAddress) = a.address.let { (it[0].toInt() and 0xff) == 198 && (it[1].toInt() and 0xfe) == 18 }
+    private fun fakeIp(a: InetAddress) = DesktopNetwork.tunAddress(a.hostAddress)
 
     private class Resolved(val address: InetAddress, val localIp: String, val time: Long)
-
-    private fun note(host: String, stage: String, pinned: Boolean, error: Exception?) {
-        val cause = error?.let { e -> generateSequence<Throwable>(e) { it.cause }.take(3).joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message.orEmpty().take(120)}" } }
-        val line = "${java.time.Instant.now()} ${maskIps(host)} $stage" + (if (os == Os.WINDOWS && !stage.startsWith("dns")) " pin=$pinned" else "") +
-            (cause?.let { " ${maskIps(it)}" } ?: "")
-        synchronized(trace) { trace.addLast(line); while (trace.size > 12) trace.removeFirst() }
-    }
 
     companion object {
         val requests = AtomicLong()
@@ -103,7 +119,16 @@ class BoundTransport(private val localIp: String) : Transport {
         private val dohServers = listOf("223.5.5.5", "1.12.12.12")
         private val udpServers = listOf("223.5.5.5", "119.29.29.29")
         private val resolved = java.util.concurrent.ConcurrentHashMap<String, Resolved>()
+        private const val TUNNEL_MEMORY_MS = 600_000L
+        private val tunnelPreferred = java.util.concurrent.ConcurrentHashMap<String, Long>()
         private val trace = ArrayDeque<String>()
+
+        /** One trace line: host (IPs to /16), what happened, and the exception chain. Never a path: it holds the token. */
+        internal fun record(host: String, what: String, method: String?, error: Throwable?) {
+            val cause = error?.let { e -> generateSequence(e) { it.cause }.take(3).joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message.orEmpty().take(120)}" } }
+            val line = listOfNotNull(java.time.Instant.now().toString(), method, maskIps(host), what, cause?.let(::maskIps)).joinToString(" ")
+            synchronized(trace) { trace.addLast(line); while (trace.size > 16) trace.removeFirst() }
+        }
         /** The latest requests of this run, IPs kept to /16 like the rest of the redacted export. */
         fun trace(): List<String> = synchronized(trace) { trace.toList() }
         internal fun maskIps(text: String) = text.replace(Regex("""\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b""")) { "${it.groupValues[1]}.*.*" }

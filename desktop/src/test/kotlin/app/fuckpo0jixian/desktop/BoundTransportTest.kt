@@ -25,6 +25,19 @@ class BoundTransportTest {
         assertEquals("connect to 124.221.*.* failed", BoundTransport.maskIps("connect to 124.221.69.228 failed"))
     }
 
+    @Test fun stunReadsXorMappedAddress() {
+        val id = ByteArray(12) { it.toByte() }
+        assertEquals(20, Stun.request(id).size)
+        // Binding success with one XOR-MAPPED-ADDRESS for 203.0.113.9:54321.
+        val cookie = 0x2112A442
+        val body = java.nio.ByteBuffer.allocate(12).putShort(0x0020).putShort(8).put(0).put(1)
+            .putShort((54321 xor (cookie ushr 16)).toShort()).putInt(((203 shl 24) or (0 shl 16) or (113 shl 8) or 9) xor cookie).array()
+        val reply = java.nio.ByteBuffer.allocate(20 + body.size).putShort(0x0101).putShort(body.size.toShort()).putInt(cookie).put(id).put(body).array()
+        assertEquals("203.0.113.9", Stun.parse(reply, id))
+        assertNull(Stun.parse(reply, ByteArray(12)))
+        assertNull(Stun.parse(reply.copyOf(10), id))
+    }
+
     @Test fun dnsQueryRoundTrips() {
         val q = Dns.encode(0x1234, "ip.3322.net")
         // Build a reply: header with answer count 1, the question, then one compressed A record.
@@ -63,7 +76,9 @@ class BoundTransportTest {
         java.nio.channels.SocketChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
         java.nio.channels.DatagramChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
         assertEquals(200, BoundTransport(link.localIp!!).execute("GET", "https://1.1.1.1/cdn-cgi/trace").status)
-        System.err.println("WINDOWS pinned request ok via ${link.iface}")
+        assertEquals(200, BoundTransport(link.localIp!!, allowTunnel = true).execute("GET", "https://1.1.1.1/cdn-cgi/trace").status)
+        System.err.println("WINDOWS pinned request ok via ${link.iface}; stun=${Stun.query(link.localIp!!) != null}")
+        System.err.println(BoundTransport.trace().joinToString("\n"))
     }
 
     /** Real request out of the LAN interface. Opt-in: FUCKPO0JIXIAN_LIVE=1. */

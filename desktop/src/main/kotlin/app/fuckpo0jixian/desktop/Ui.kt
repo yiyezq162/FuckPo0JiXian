@@ -217,7 +217,7 @@ private fun matchedName(s: State, link: DesktopLink?): String? {
         }
         Hairline(); Action("导出脱敏数据") { export = true }
     }
-    Section(header = "关于", footer = "电脑按路由器识别网络，不需要定位权限。请求直接走本机网卡，不受系统代理和 VPN / TUN 影响。") {
+    Section(header = "关于", footer = "电脑按路由器识别网络，不需要定位权限。出口直接从本机网卡核对，开着代理或 TUN 也不会把代理的地址写入白名单。") {
         ListRow("版本", value = c.version)
     }
     if (tokenDialog) {

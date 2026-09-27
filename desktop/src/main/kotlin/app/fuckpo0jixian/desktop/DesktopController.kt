@@ -15,7 +15,10 @@ import java.util.UUID
 class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create(),
                         /** Seams for tests; the app always uses the real network and bound sockets. */
                         private val network: () -> DesktopLink = DesktopNetwork::read,
-                        private val transportFor: (localIp: String) -> Transport = ::BoundTransport) {
+                        /** Public IPv4 seen directly from the LAN interface, or null to fall back to the HTTPS probe. */
+                        private val stun: (localIp: String) -> String? = Stun::query,
+                        /** tunnel = true only for Po0: see BoundTransport. The exit probe is always direct. */
+                        private val transportFor: (localIp: String, tunnel: Boolean) -> Transport = ::BoundTransport) {
     val policy = Policy()
     private val engine = Engine(store, policy = policy)
     val busy = MutableStateFlow(false)
@@ -82,8 +85,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
         withContext(Dispatchers.IO) { store.save(state) }
         return try {
-            val reply = transportFor(l.localIp!!).execute("GET", ProbeSource.IP3322.url)
-            val observed = DomesticProbe.parse(reply, now, l.key, ProbeSource.IP3322)
+            val observed = observeExit(l, now)
             withContext(Dispatchers.IO) { store.save(store.load().copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
             true
         } catch (e: CancellationException) { throw e }
@@ -93,6 +95,12 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                 nextProbeAllowed = if (Long.MAX_VALUE - now < wait) Long.MAX_VALUE else now + wait)) }
             false
         }
+    }
+
+    /** STUN over pinned UDP first (direct even under a Windows TUN), then ip.3322.net over the pinned direct route. */
+    private suspend fun observeExit(l: DesktopLink, now: Long): DomesticExit {
+        withContext(Dispatchers.IO) { stun(l.localIp!!) }?.let { return DomesticExit(it, now, l.key, ProbeSource.STUN) }
+        return DomesticProbe.parse(transportFor(l.localIp!!, false).execute("GET", ProbeSource.IP3322.url), now, l.key, ProbeSource.IP3322)
     }
 
     suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, fallback: Boolean = false): String {
@@ -105,7 +113,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             link.value = l
             if (!l.online) { feedback.value = "当前没有可用网络"; return "OFFLINE" }
             // Every request of this check leaves through this interface, whatever VPN / TUN / proxy is running.
-            val transport = transportFor(l.localIp!!)
+            val transport = transportFor(l.localIp!!, true)
             val permit = manualPreview.value
             fun same() = runCatching { network() }.getOrNull()?.key == l.key
             var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(System.currentTimeMillis()), manualPermit = permit) { same() }
@@ -126,7 +134,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                 }?.cidr
                 session = session.copy(observedCidr = observed, revalidate = {
                     val again = withContext(Dispatchers.IO) { network() }
-                    val exit = DomesticProbe.parse(transport.execute("GET", ProbeSource.IP3322.url), System.currentTimeMillis(), l.key, ProbeSource.IP3322)
+                    val exit = observeExit(l, System.currentTimeMillis())
                     again.key == l.key && exit.cidr == observed
                 })
             }

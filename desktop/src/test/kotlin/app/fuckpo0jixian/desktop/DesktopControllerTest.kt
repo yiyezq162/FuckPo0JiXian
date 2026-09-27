@@ -26,10 +26,13 @@ class DesktopControllerTest {
             entries.entries.joinToString(",") { """{"ip":"${it.value}","slot":${it.key}}""" }}]}"""
     }
 
+    /** What STUN reports; null means STUN is unavailable and the HTTPS probe is used. */
+    private var stunExit: (() -> String?)? = null
+
     private fun setup(internet: FakeInternet, link: () -> DesktopLink): DesktopController {
         val dir = Files.createTempDirectory("fpjx")
         val vault = FileVault(dir.resolve("t")).apply { save("pgnfw_CONTROLLER_TEST") }
-        val c = DesktopController(FileStore(dir), vault, link) { internet }
+        val c = DesktopController(FileStore(dir), vault, link, stun = { stunExit?.invoke() }) { _, _ -> internet }
         c.store.save(State(mode = Mode.AUTO, paused = false, accountContext = "acct", deviceName = "Mac",
             snapshot = Snapshot(Cidr("198.51.100.0/24"), listOf(Entry(Cidr("198.51.100.0/24"), 0)), 5),
             layout = SlotLayout(slots = listOf(
@@ -71,9 +74,27 @@ class DesktopControllerTest {
                 if (url == ProbeSource.IP3322.url) HttpReply(200, "192.0.2.1") else inner.execute(method, url)
         }
         val base = setup(internet.inner) { home }
-        val c = DesktopController(base.store, base.vault, { home }) { internet }
+        val c = DesktopController(base.store, base.vault, { home }, stun = { null }) { _, _ -> internet }
         assertEquals("EGRESS_UNVERIFIED", c.runCheck(manual = true))
         assertTrue(internet.inner.calls.none { it.startsWith("POST") })
+    }
+
+    @Test fun stunIsTheExitWhenItAnswers() = runBlocking {
+        val internet = FakeInternet("203.0.113.9", mutableMapOf(0 to "198.51.100.0/24"))
+        stunExit = { "203.0.113.9" }
+        val c = setup(internet) { home }
+        assertEquals("SLOT_UPDATED", c.runCheck(manual = true))
+        assertEquals(ProbeSource.STUN, c.store.load().domesticExit?.source)
+        assertTrue(internet.calls.none { it.contains("ip.3322.net") })
+    }
+
+    /** Po0 reached through a proxy sees the proxy's exit; the direct STUN view differs, so nothing is written. */
+    @Test fun proxiedPo0NeverWritesWhenStunDisagrees() = runBlocking {
+        val internet = FakeInternet("203.0.113.9", mutableMapOf(0 to "198.51.100.0/24"))
+        stunExit = { "192.0.2.1" }
+        val c = setup(internet) { home }
+        assertEquals("EGRESS_UNVERIFIED", c.runCheck(manual = true))
+        assertTrue(internet.calls.none { it.startsWith("POST") })
     }
 
     @Test fun pausedOfflineAndMissingTokenDoNothing() = runBlocking {
