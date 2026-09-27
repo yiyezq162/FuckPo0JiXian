@@ -59,6 +59,7 @@ class BoundTransportTest {
         java.nio.channels.SocketChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
         java.nio.channels.DatagramChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
         assertEquals(200, BoundTransport(link.localIp!!).execute("GET", "https://1.1.1.1/cdn-cgi/trace").status)
+        System.err.println("WINDOWS pinned request ok via ${link.iface}")
     }
 
     /** Real request out of the LAN interface. Opt-in: FUCKPO0JIXIAN_LIVE=1. */
