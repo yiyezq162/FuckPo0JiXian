@@ -12,6 +12,10 @@ android {
         testInstrumentationRunner = "app.allowmate.SafeTestRunner"
     }
     buildFeatures { compose = true }
+    signingConfigs {
+        // CI passes the published development key explicitly; local builds keep using ~/.android/debug.keystore.
+        System.getenv("ALLOWMATE_KEYSTORE")?.let { path -> getByName("debug") { storeFile = file(path) } }
+    }
     buildTypes {
         create("preview") {
             initWith(getByName("release"))
