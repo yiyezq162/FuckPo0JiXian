@@ -29,9 +29,18 @@ data class Ownership(val cidr: Cidr, val authorized: Boolean = false, val protec
 data class Budget(val fixed: Int = 0, val mobile: Int = 0) : Serializable {
     init { require(fixed in 0..10000 && mobile in 0..10000 && fixed + mobile <= 10000) }
 }
-data class Policy(val debounceMs: Long = 15_000, val minIntervalMs: Long = 120_000,
-                  val cacheMs: Long = 900_000, val fallbackMinutes: Long = 30,
-                  val maxBackoffMs: Long = 3_600_000, val retentionMs: Long = 7 * 86_400_000L) : Serializable
+/**
+ * Po0 publishes no rate limit, so timing follows its official scripts: react to network changes within
+ * seconds and fall back every 10 minutes. [minIntervalMs] only stops automatic retry loops; manual checks
+ * skip it. Fallback runs compare the exit locally and query Po0 only when something may have changed, or
+ * at least every [remoteRefreshMs] to notice edits made by other devices.
+ */
+data class Policy(val debounceMs: Long = 3_000, val minIntervalMs: Long = 10_000,
+                  val cacheMs: Long = 900_000, val fallbackMinutes: Long = 10,
+                  val maxBackoffMs: Long = 3_600_000, val retentionMs: Long = 7 * 86_400_000L,
+                  /** How long an exit observation counts as current evidence for writes and authorization. */
+                  val freshnessMs: Long = 120_000,
+                  val remoteRefreshMs: Long = 3_600_000, val probeIntervalMs: Long = 10_000) : Serializable
 data class Observation(val time: Long, val cidr: Cidr, val networkKind: String) : Serializable
 data class Event(val time: Long, val code: String) : Serializable
 /** Explicit user-authorized server slots; never inferred from list positions. */

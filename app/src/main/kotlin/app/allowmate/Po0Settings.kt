@@ -1,5 +1,9 @@
 package app.allowmate
 
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
@@ -16,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -43,12 +49,13 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
         }
     }
     item(key = "po0-frequency") {
-        Section(header = "检查频率", footer = "系统休眠时检查可能延后。") {
-            ListRow("切换网络后", value = "约 15 秒")
-            ListRow("最短间隔", value = "2 分钟")
-            ListRow("网络不变时", value = "约 30 分钟")
+        Section(header = "检查频率", footer = "网络不变时只在本机对比出口 IP，变化了才查询 Po0，以减少接口请求。系统休眠时可能延后。") {
+            ListRow("切换网络后", value = "约 3 秒")
+            ListRow("网络不变时", value = "每 10 分钟对比出口")
+            ListRow("与 Po0 核对", value = "出口变化时，至少每小时")
         }
     }
+    item(key = "po0-background") { BackgroundSection() }
     item(key = "po0-runtime") { RuntimeSection(s, c, busy) }
     item(key = "po0-about") {
         val context = LocalContext.current
@@ -115,6 +122,25 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
                 ListRow("最近连接", subtitle = readableEvidence(lastConnection))
                 ListRow("最近结果", subtitle = readableEvidence(result))
             }
+        }
+    }
+}
+
+/** Standard mode depends on the system letting the app wake up; these are the switches that decide it. */
+@Composable private fun BackgroundSection() {
+    val context = LocalContext.current
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val exempt = remember(lifecycle) { context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
+    val colors = Apple.colors
+    Section(header = "后台运行", inset = 58.dp, footer = "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」，" +
+        "并在最近任务中锁定本应用，否则可能被清理。已 root 的设备可改用「模块增强」。") {
+        ListRow("电池优化", value = if (exempt) "不受限制" else "受限制", leading = { IconTile(Glyphs.Bolt, colors.orange) })
+        if (!exempt) ActionRow("允许在后台运行") {
+            runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
+                .onFailure { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }
+        ActionRow("自启动与后台设置") {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
         }
     }
 }

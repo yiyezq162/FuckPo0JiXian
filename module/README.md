@@ -1,4 +1,4 @@
-# AllowMate 0.5 运行模式模块（本地验收候选）
+# AllowMate 0.6 运行模式模块
 
 （如果您不知道这个是什么，那么就不用理会）
 
@@ -6,7 +6,7 @@
 
 适用于 Magisk / KernelSU 模块安装器；KernelSU已有条件性真机证据，最新修订及Magisk仍需对应真机验收。APK仍可完全独立使用。模块仅维护一个 root app_process 事件 helper，所有国内出口和 Po0 请求仍由 APK UID 执行。无需挂载、metamodule、SELinux规则、全局Doze修改或root授权弹窗。
 
-service.sh 为共同 late_start 入口；KernelSU boot-completed.sh 可再次尝试启动，文件锁保证唯一实例。失败仅重试4次、15/30/45/60秒退避，不承诺永久恢复。网络回调驱动固定短时服务；60秒定时器只检查生命周期，不发HTTP、不持有唤醒锁。门禁文件事件及生命周期检查发现新的可运行代次时，至多发出一次恢复触发，涵盖解除暂停、模式启用、首次解锁及APK更新；没有变化则不唤起APK。Android隐藏systemContext API不保证每个ROM可用，失败显示降级。
+service.sh 为共同 late_start 入口；KernelSU boot-completed.sh 可再次尝试启动，文件锁保证唯一实例。失败仅重试4次、15/30/45/60秒退避，不承诺永久恢复。网络变化（含同一网络上本机 IPv4 变化）驱动固定短时服务，3 秒内合并重复事件；另每 10 分钟唤起一次兜底检查，APK 只在本机对比出口，变化或满一小时才请求 Po0。60秒定时器只检查生命周期，不发HTTP、不持有唤醒锁。门禁文件事件及生命周期检查发现新的可运行代次时，至多发出一次恢复触发，涵盖解除暂停、模式启用、首次解锁及APK更新；没有变化则不唤起APK。Android隐藏systemContext API不保证每个ROM可用，失败显示降级。
 
 helper仅读取APK专用runtime-v1.json（协议、安装随机ID、选择/暂停门禁与代次），不读取state-v1.json或credential.enc。固定abstract Unix socket接受已固定签名且UID匹配的主用户APK的STATUS/INFO/CLAIM；额外只允许root诊断进程调用DIAGNOSTICS，root不能用该接口领取APK票据。APK也验证服务端UID0。没有任意命令或地址参数。APK更新、helper重启和模式门禁改变后旧票据无效。
 
@@ -18,7 +18,7 @@ KernelSU Action可通过官方module config --temp更新override.description，�
 
 每个helper代次必须先完成APK内只读请求才允许后续使用原自动同步开关。仅握手、排队、缓存或限频不算完成。模块禁用/remove被每次事件和票据核验检查；FileObserver/60秒生命周期检查退出helper。首次解锁前不接触凭据；强停标记阻止自动拉起，只有用户主动打开应用才恢复。
 
-安装前先核对dist/SHA256SUMS-runtime05和APK签名。当前只支持主用户0、APK versionCode5；更新APK需匹配模块协议/版本。本次只调整兼容版本，协议仍为1；固定网络身份与稳定槽位全部由APK维护，模块不接收SSID/BSSID或授权。不支持工作资料或多用户。不得把“撤销APK su权限”误当作模块禁用：此APK不申请su，必须在管理器禁用/卸载模块。管理器直接剥夺模块root能力仍未真机验证。
+安装前先核对dist/SHA256SUMS-runtime06和APK签名。当前只支持主用户0；APK versionCode 须与模块 module.prop 的 versionCode 一致（本版 6），更新APK需同时更新模块。协议仍为1；固定网络身份与稳定槽位全部由APK维护，模块不接收SSID/BSSID或授权。不支持工作资料或多用户。不得把“撤销APK su权限”误当作模块禁用：此APK不申请su，必须在管理器禁用/卸载模块。管理器直接剥夺模块root能力仍未真机验证。
 
 回退：先在APK选标准模式（保留所有配置与限频）；必要时在「概览」页暂停。再在管理器禁用/卸载allowmate_helper；观察短时服务退出（90秒协程超时，深Doze单独降级退出，不保证深睡墙钟上限），待授权重启确认卸载结果。无需清数据/卸载APK，不删除Po0条目，不修改家宽更新器。不要为回退卸载APK或强行降版本；旧包可保留作参考，旧版不理解新字段。
 

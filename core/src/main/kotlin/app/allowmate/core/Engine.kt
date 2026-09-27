@@ -29,7 +29,7 @@ class Engine(private val store: StateStore, private val now: () -> Long = System
         try {
             // Real Po0 and the demo use exactly the same slot authorization path.
             // Generic Profile/Budget support below is retained only for historical non-slot fixtures.
-            if (platform is SlotPlatform) return LayoutSync(store, now, policy).check(platform, network, observeOnly)
+            if (platform is SlotPlatform) return LayoutSync(store, now, policy).check(platform, network, observeOnly, manual)
             var s = store.load()
             val t = now()
             if (s.paused && !observeOnly) return "PAUSED"
@@ -98,7 +98,7 @@ class Engine(private val store: StateStore, private val now: () -> Long = System
 }
 
 /** Monotonic times supplied by caller; duplicate callbacks do not reset a stable deadline. */
-class Debouncer(private val delayMs: Long = 15_000) {
+class Debouncer(private val delayMs: Long = Policy().debounceMs) {
     private var key: String? = null
     private var deadline = Long.MAX_VALUE
     private var emitted = false

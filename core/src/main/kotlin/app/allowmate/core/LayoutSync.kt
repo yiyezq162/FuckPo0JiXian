@@ -4,14 +4,16 @@ import kotlinx.coroutines.CancellationException
 
 /** One target per transaction; GET-before-write is not a server CAS. */
 internal class LayoutSync(private val store: StateStore, private val now: () -> Long, private val policy: Policy) {
-    suspend fun check(platform: SlotPlatform, network: NetworkSession, observeOnly: Boolean): String {
+    suspend fun check(platform: SlotPlatform, network: NetworkSession, observeOnly: Boolean, manual: Boolean = false): String {
         var s = LayoutRules.migrate(store.load())
         val t = now()
         val permit = network.manualPermit
         if (s.globalBlock != null) return s.globalBlock!!
         if (s.paused && !observeOnly) return "PAUSED"
         if (s.authBlocked) return "AUTH_PAUSED"
-        if (t < s.nextAllowed) return "RATE_LIMITED"
+        // A person pressing "check" is never made to wait for the loop guard or local backoff,
+        // but a server-mandated Retry-After (429) always holds.
+        if (t < s.nextAllowed && !(manual && s.status != "HTTP_429")) return "RATE_LIMITED"
         val initialAccount = s.accountContext
         val initialVersion = s.layout?.version
         val initialMode = s.mode

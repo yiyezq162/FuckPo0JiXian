@@ -4,7 +4,7 @@
 
 自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，AllowMate 会把对应的白名单槽位更新成新的 /24 网段。Android 9+，标准模式无需 root。
 
-> 当前源码为 **0.5.0-preview**，属于测试预发布，不是稳定正式版。
+> 当前源码为 **0.6.0-preview**，属于测试预发布，不是稳定正式版。
 
 ## 下载
 
@@ -37,12 +37,21 @@
 - **严格识别固定网络**：必须同时匹配已授权的 Wi-Fi 名称、接入点 (BSSID)、加密方式和本次连接，绝不根据 IP 或网段猜测。可防误连，但无法防范刻意伪造的同名热点；同名的新接入点只会提示确认。
 - **写入前后都核对**：查询 → 写前重读 → 记录待确认操作 → 定向写入 → 再次查询核验。平台没有 CAS，写前重读无法完全消除最后一刻的竞态，请勿让其他客户端共用同一槽位。
 - **不信任代理出口**：检测到 VPN 或系统代理时跳过；国内出口与平台识别不一致时禁止写入。
-- **克制的检查频率**：切网后约 15 秒检查，两次请求至少间隔 2 分钟，网络不变时约 30 分钟兜底一次，失败自动退避。系统休眠时可能延后。
-- Android 12+ 需要精确位置权限才能读取 Wi-Fi 名称（不获取位置）；Android 9–11 请使用手动更新。
+- **少查接口**：切换网络约 3 秒后查询 Po0；网络不变时每 10 分钟只在本机对比出口 IP，变化了或满一小时才查询 Po0。手动检查随时可用；失败自动退避，并遵守平台的限流要求。系统休眠时可能延后。
+- Android 12+ 读取 Wi-Fi 名称需要精确位置权限（不获取位置）。固定网络要在后台自动更新，还需在槽位的“后台识别”中把位置权限设为“始终允许”，否则只在打开应用时识别；移动数据槽不需要。Android 9–11 请使用手动更新。
 
 ## 隐私
 
-Token 由 Android Keystore 加密；状态和 Wi-Fi 授权存放在不参与备份的私有目录。日志、诊断和模块通信不包含 SSID、BSSID 或 Token。国内出口默认通过 ip.3322.net 查询，该站点会看到你的出口 IP。请勿公开原始状态、接口链接或真实设备日志。
+Token 由 Android Keystore 加密；状态和 Wi-Fi 授权存放在不参与备份的私有目录。日志、诊断和模块通信不包含 SSID、BSSID 或 Token。国内出口默认通过 ip.3322.net 查询（网络不变时约每 10 分钟一次），该站点会看到你的出口 IP。请勿公开原始状态、接口链接或真实设备日志。
+
+## 后台运行
+
+标准模式（免 root）靠系统唤起应用，不需要常驻：
+
+- **切换网络**：向系统登记网络变化，应用即使已被清理（未被强行停止）也会被唤起；同一网络上本机 IPv4 变化（如移动数据重新拨号）也会触发。
+- **10 分钟兜底**：使用 Doze 期间也允许的闹钟，每 10 分钟对比一次出口；另有 15 分钟一次的系统任务作为备份。重启后自动恢复。
+
+国产系统常会清理后台应用，请在「设置 → 后台运行」中允许不受电池优化限制，并在系统设置里允许自启动、后台运行，在最近任务中锁定本应用。强行停止后，所有唤起都会失效，直到再次打开应用。
 
 ## 运行模式
 
@@ -57,7 +66,7 @@ Token 由 Android Keystore 加密；状态和 Wi-Fi 授权存放在不参与备�
 ```sh
 sh scripts/build.sh :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
 sh scripts/package.sh
-(cd dist && shasum -a 256 -c SHA256SUMS-runtime05)
+(cd dist && shasum -a 256 -c SHA256SUMS-runtime06)
 ```
 
 产物在 `dist/`，文件名中的版本号取自 `app/build.gradle.kts`。
@@ -75,7 +84,7 @@ GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）
 发布新版本：
 
 1. 修改 `app/build.gradle.kts` 的 `versionName` / `versionCode`，以及 `module/module.prop` 的 `version` / `versionCode`。
-2. 提交并推送后打标签：`git tag v0.5.0-preview && git push origin v0.5.0-preview`
+2. 提交并推送后打标签：`git tag v<版本号> && git push origin v<版本号>`（与 `versionName` 一致）
 3. Actions 会自动创建一个**草稿** Release 并附上全部文件。检查说明后点击 Publish 即可公开。
 
 签名：已发布版本都用同一个开发证书签名（SHA-256 `f6a7aff…26be`），手机才能覆盖升级，模块也只信任这个证书。Actions 从仓库 Secret `DEBUG_KEYSTORE_BASE64` 读取该密钥；未配置时只能生成临时签名的测试包，打标签发布会直接失败。

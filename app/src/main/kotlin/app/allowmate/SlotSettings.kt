@@ -1,6 +1,12 @@
 package app.allowmate
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,7 +30,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -32,6 +41,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.allowmate.core.*
 import app.allowmate.core.State
+
+/** Android only reveals Wi-Fi identity to a background app holding "allow all the time" location. */
+internal fun backgroundLocationGranted(context: Context) = Build.VERSION.SDK_INT >= 29 &&
+    context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+/** Re-read on every resume, since the user grants this in system settings. */
+@Composable internal fun rememberBackgroundLocation(): Boolean {
+    val context = LocalContext.current
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    return remember(lifecycle) { backgroundLocationGranted(context) }
+}
 
 internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固定网络"; SlotPurpose.MOBILE -> "设备移动"; SlotPurpose.RESERVED -> "保留用途" }
 internal fun writerText(w: Writer) = when (w) { Writer.LOCAL -> "本机"; Writer.OTHER_DEVICE -> "其他设备"; Writer.EXTERNAL -> "外部 / 未知" }
@@ -73,7 +93,7 @@ internal fun wifiIdentityText(s: State, wifi: WifiObservation?): String? {
     }
 }
 
-internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, edit: (Int) -> Unit, configure: () -> Unit) {
+internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, background: Boolean, edit: (Int) -> Unit, configure: () -> Unit) {
     val snap = s.snapshot
     item(key = "wl-summary") {
         val wifi by c.wifiObservation.collectAsState()
@@ -89,7 +109,9 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, edi
         "发现同名的新接入点，请在对应槽位中确认".takeIf { s.layout?.notices?.any { it.startsWith("AP_CONFIRM:") } == true },
         "旧配置已迁移，固定槽需要重新绑定 Wi-Fi".takeIf { s.layout?.notices?.contains("MIGRATED_WIFI_POLICY_OFF") == true },
         s.globalBlock?.let(::statusText),
-        "有待确认的写入，下次检查会先核对".takeIf { s.layout?.pending != null })
+        "有待确认的写入，下次检查会先核对".takeIf { s.layout?.pending != null },
+        "后台无法识别 Wi-Fi：请在固定槽中开启「后台识别」".takeIf { !s.demo && !background &&
+            s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId != null } == true })
     if (notices.isNotEmpty()) item(key = "wl-notices") {
         Section(header = "需要注意", inset = 50.dp) {
             notices.forEach { ListRow(it, leading = { Icon(Icons.Rounded.Warning, null, tint = Apple.colors.orange, modifier = Modifier.size(22.dp)) }) }
@@ -153,8 +175,16 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     var bind by remember { mutableStateOf<Boolean?>(null) }
     var showAps by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var bindNext by remember { mutableStateOf(false) }
     val wifi by c.wifiObservation.collectAsState()
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { c.foreground(); c.refreshWifi() }
+    val context = LocalContext.current
+    val background = rememberBackgroundLocation()
+    var backgroundDenied by remember { mutableStateOf(false) }
+    val backgroundPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        backgroundDenied = !granted; c.foreground()
+    }
+    val foregroundGranted = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     val identity = s.layout?.identities?.find { it.id == original.identityId }
     val remote = s.snapshot?.entries?.find { it.slot == original.number }?.cidr
     val colors = Apple.colors
@@ -162,17 +192,29 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     BackHandler(onBack = close)
     LaunchedEffect(Unit) { c.refreshWifi() }
     LaunchedEffect(error) { if (error != null) scroll.animateScrollTo(0) }
+    // After authorizing a fixed slot, stay here and bring the Wi-Fi binding step into view.
+    val bindable = original.purpose == SlotPurpose.FIXED && original.writer == Writer.LOCAL && original.authorized
+    LaunchedEffect(bindNext, bindable) {
+        if (bindNext && bindable) { c.refreshWifi(); withFrameNanos { }; scroll.animateScrollTo(scroll.maxValue) }
+    }
     fun save() {
         val candidate = original.copy(name = name, purpose = purpose, writer = writer, automatic = automatic,
             allowUnknownWifi = unknown, temporaryHold = hold)
         val validation = runCatching { LayoutRules.saveSlot(s, candidate, acknowledge, System.currentTimeMillis()) }
-        if (validation.isSuccess) { c.configureSlot(candidate, acknowledge); close() }
+        if (validation.isSuccess) {
+            c.configureSlot(candidate, acknowledge)
+            val saved = validation.getOrNull()?.layout?.slots?.find { it.number == original.number }
+            error = null
+            if (saved != null && saved.purpose == SlotPurpose.FIXED && saved.writer == Writer.LOCAL && saved.authorized && saved.identityId == null) {
+                bindNext = true; acknowledge = false
+            } else close()
+        }
         else error = statusText((validation.exceptionOrNull() as? ApiFailure)?.code ?: validation.exceptionOrNull()?.message ?: "CONFIG_INVALID")
     }
     Column(Modifier.fillMaxSize().background(colors.background)) {
         Column(Modifier.fillMaxWidth().background(colors.bar).statusBarsPadding()) {
             Box(Modifier.fillMaxWidth().height(52.dp)) {
-                Box(Modifier.align(Alignment.CenterStart)) { NavButton("取消", onClick = close) }
+                Box(Modifier.align(Alignment.CenterStart)) { NavButton(if (bindNext) "完成" else "取消", onClick = close) }
                 Text("槽 ${original.number + 1}", style = Apple.headline, color = colors.label, modifier = Modifier.align(Alignment.Center))
                 Box(Modifier.align(Alignment.CenterEnd)) { NavButton("保存", enabled = !busy, bold = true, onClick = ::save) }
             }
@@ -208,16 +250,22 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                         ToggleRow("自动更新此槽", automatic, { automatic = it })
                         if (purpose == SlotPurpose.MOBILE) {
                             ToggleRow("未知 Wi-Fi 也可更新", unknown, { unknown = it })
-                            ToggleRow("暂停替换", hold, { hold = it }, subtitle = "临时保留当前记录")
+                            ToggleRow("锁定当前 IP", hold, { hold = it }, subtitle = "网络变化时不替换这一格")
                         }
                     }
                     Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。请确认没有其他设备在写入此槽。") {
                         ToggleRow("授权本机管理", acknowledge, { acknowledge = it })
                     }
                 }
-                if (original.purpose == SlotPurpose.FIXED && original.writer == Writer.LOCAL && original.authorized) {
+                if (purpose == SlotPurpose.FIXED && writer == Writer.LOCAL && !bindable) {
+                    Section(header = "Wi-Fi 绑定", footer = "打开「授权本机管理」并保存后，即可在这里绑定当前 Wi-Fi。") {
+                        ListRow("保存后可绑定", titleColor = colors.secondary)
+                    }
+                }
+                if (bindable) {
                     val usable = wifi?.usable(System.currentTimeMillis(), if (s.demo) "demo" else c.currentNetworkKey.value ?: "") == true
-                    Section(header = "Wi-Fi 绑定", footer = "读取 Wi-Fi 名称需要精确位置权限，不会获取你的位置。Android 11 及以下请使用手动更新。") {
+                    Section(header = "Wi-Fi 绑定", footer = "自动更新要在后台识别 Wi-Fi，需要把位置权限设为「始终允许」。只读取 Wi-Fi 名称和接入点，不获取你的位置。Android 11 及以下请使用手动更新。") {
+                        if (bindNext && identity == null) ListRow("已保存。连接到要绑定的 Wi-Fi，然后点「绑定当前 Wi-Fi」。", titleColor = colors.green)
                         ListRow("已绑定", value = identity?.ssid ?: "未绑定")
                         ListRow("当前 Wi-Fi", value = if (usable) wifi?.ssid else "无法读取")
                         if (!usable) {
@@ -225,6 +273,15 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                             ActionRow("重新读取", onClick = c::refreshWifi)
                         }
                         ActionRow("绑定当前 Wi-Fi", enabled = usable && !busy) { bind = false }
+                        if (!s.demo && Build.VERSION.SDK_INT >= 31) {
+                            ListRow("后台识别", value = if (background) "已开启" else "未开启")
+                            if (!background && foregroundGranted) {
+                                ActionRow("开启后台识别（始终允许）") { backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
+                                if (backgroundDenied) ActionRow("在系统设置中选择「始终允许」") {
+                                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+                                }
+                            }
+                        }
                         if (identity != null) {
                             ActionRow("添加当前接入点", enabled = usable && !busy) { bind = true }
                             ListRow("已授权接入点", value = "${identity.aps.size} 个", chevron = !showAps) { showAps = !showAps }

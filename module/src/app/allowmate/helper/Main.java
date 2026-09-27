@@ -47,7 +47,15 @@ public final class Main {
     private static boolean wakeFailed;
     private static String recoveryEpoch = "";
     private static FileObserver moduleObserver, configObserver;
-    private static final Runnable wake = Main::trigger;
+    private static final Runnable wake = () -> trigger("network");
+    // Fallback cadence matches the APK: every 10 minutes the APK compares its exit locally and only asks Po0 on change.
+    private static final long FALLBACK_MS = 10 * 60_000;
+    private static final Runnable fallback = new Runnable() { public void run() {
+        handler.postDelayed(this, FALLBACK_MS);
+        trigger("fallback");
+    } };
+    /** APK versionCode this module was packaged for; package.sh keeps module.prop and the APK in step. */
+    private static long expectedVersion = -1;
     public static void main(String[] args) throws Exception {
         if (android.os.Process.myUid() != 0 || args.length != 0) return;
         // Kernel releases this lock on exit/crash; no stale PID killing or PID reuse hazard.
@@ -55,6 +63,8 @@ public final class Main {
         FileLock lock = lockFile.getChannel().tryLock();
         if (lock == null) return;
         certificate = new String(Files.readAllBytes(new File(DIR, "certificate.sha256").toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+        for (String line : Files.readAllLines(new File(DIR, "module.prop").toPath(), java.nio.charset.StandardCharsets.UTF_8))
+            if (line.startsWith("versionCode=")) expectedVersion = Long.parseLong(line.substring("versionCode=".length()).trim());
         Looper.prepareMainLooper();
         Class<?> at = Class.forName("android.app.ActivityThread");
         Object thread = at.getMethod("systemMain").invoke(null);
@@ -74,10 +84,16 @@ public final class Main {
                 public void onAvailable(Network n) { event(); }
                 public void onLost(Network n) { event(); }
                 public void onCapabilitiesChanged(Network n, NetworkCapabilities caps) { event(); }
+                // Same network, new local IPv4 (e.g. mobile data re-attach): the public exit likely moved too.
+                public void onLinkPropertiesChanged(Network n, android.net.LinkProperties link) { event(); }
                 private void event() { handler.post(() -> {
                     Network n = cm.getActiveNetwork();
                     NetworkCapabilities caps = n == null ? null : cm.getNetworkCapabilities(n);
-                    String key = n + ":" + (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+                    android.net.LinkProperties link = n == null ? null : cm.getLinkProperties(n);
+                    StringBuilder ipv4 = new StringBuilder();
+                    if (link != null) for (android.net.LinkAddress a : link.getLinkAddresses())
+                        if (a.getAddress() instanceof java.net.Inet4Address) ipv4.append(a.getAddress().getHostAddress()).append(',');
+                    String key = n + ":" + (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) + ":" + ipv4;
                     if (key.equals(observed)) return;
                     observed = key; handler.removeCallbacks(wake); handler.postDelayed(wake, 500);
                 }); }
@@ -89,8 +105,9 @@ public final class Main {
             android.util.Log.w("AllowMateHelper", "CALLBACK_START_FAILED_" + denied.getClass().getSimpleName());
             throw new IllegalStateException("CALLBACK_START_FAILED", denied);
         }
-        // Lifecycle watchdog only: no HTTP, no network probing, no wake lock, no periodic APK wake.
+        // Lifecycle watchdog: no HTTP, no network probing, no wake lock.
         handler.post(new Runnable() { public void run() { lifecycle(); handler.postDelayed(this, 60_000); } });
+        handler.postDelayed(fallback, FALLBACK_MS);
         Looper.loop();
         lock.release(); lockFile.close();
     }
@@ -109,7 +126,7 @@ public final class Main {
             if (!DIR.isDirectory() || new File(DIR, "disable").exists() || new File(DIR, "remove").exists()) return "DISABLED";
             PackageInfo p = identity();
             if ((p.applicationInfo.flags & ApplicationInfo.FLAG_STOPPED) != 0) return "STOPPED";
-            if (p.getLongVersionCode() != 5) return "VERSION";
+            if (expectedVersion < 0 || p.getLongVersionCode() != expectedVersion) return "VERSION";
             if (!context.getSystemService(UserManager.class).isUserUnlocked()) return "LOCKED";
             File config = new File(p.applicationInfo.dataDir, "no_backup/runtime-v1.json");
             if (!config.isFile() || config.length() > 1024) return "STOPPED";
@@ -160,12 +177,13 @@ public final class Main {
         }
         if (!lastStatus.equals("CALLBACK_FAILED")) lastStatus = s;
     }
-    private static synchronized void trigger() {
+    private static synchronized void trigger(String kind) {
         if (!state().equals("READY")) return;
         long now = SystemClock.elapsedRealtime();
-        // Event storm bound only; APK owns business debounce/rate/backoff.
-        if (lastWake != 0 && now - lastWake < 15_000) {
-            handler.removeCallbacks(wake); handler.postDelayed(wake, 15_000 - (now - lastWake)); return;
+        // Event storm bound only; APK owns business debounce/rate/backoff. A fallback never delays a network wake.
+        if (lastWake != 0 && now - lastWake < 3_000) {
+            if (kind.equals("network")) { handler.removeCallbacks(wake); handler.postDelayed(wake, 3_000 - (now - lastWake)); }
+            return;
         }
         lastWake = now; issued = now; ticket = UUID.randomUUID().toString();
         final String pending = ticket;
@@ -182,7 +200,8 @@ public final class Main {
         }, 30_000);
         try {
             java.lang.Process process = new ProcessBuilder("/system/bin/am", "start-foreground-service", "--user", "0",
-                "-n", "app.allowmate/.RuntimeSyncService", "-a", "app.allowmate.RUNTIME_CHECK", "-f", "0x10", "--es", "ticket", ticket)
+                "-n", "app.allowmate/.RuntimeSyncService", "-a", "app.allowmate.RUNTIME_CHECK", "-f", "0x10", "--es", "ticket", ticket,
+                "--es", "trigger", kind)
                 .redirectOutput(new File("/dev/null")).redirectError(new File("/dev/null")).start();
             if (!process.waitFor(5, TimeUnit.SECONDS)) { process.destroy(); wakeFailed = true; }
             else if (process.exitValue() != 0) wakeFailed = true;

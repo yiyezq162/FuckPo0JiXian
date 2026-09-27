@@ -9,6 +9,26 @@ object SyncPlanning {
         (code in setOf("RATE_LIMITED", "BUSY") || (state.failures > 0 && code == state.status && code !in setOf("NO_TOKEN", "NETWORK_CHANGED", "CANCELLED_NETWORK_OR_SETTINGS")))
 }
 
+/** Outcomes after which nothing changes until the exit, network or configuration does. */
+private val settled = setOf("SLOT_CURRENT", "SLOT_UPDATED", "PRESENT_CURRENT_CHECK", "RECOVERED_VERIFIED", "NO_TARGET",
+    "MOBILE_MATCH", "UNKNOWN_WIFI", "COVERED_OTHER_SLOT", "SLOT_NOT_LOCAL", "TEMPORARY_HOLD", "UNMANAGED")
+
+object LocalCheck {
+    /**
+     * Fallback runs may skip Po0 when the domestic exit just observed on this network matches the exit Po0
+     * reported at the last successful check on the same network. Any doubt means a full remote check.
+     * Configuration edits reset lastSuccess, so they always reach Po0.
+     */
+    fun canSkipRemote(s: State, exit: DomesticExit?, networkKey: String?, now: Long, policy: Policy = Policy()): Boolean {
+        val snapshot = s.snapshot ?: return false
+        return exit != null && networkKey != null && !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null &&
+            s.failures == 0 && s.layout?.pending == null && s.status in settled &&
+            s.lastSuccess > 0 && now - s.lastSuccess in 0 until policy.remoteRefreshMs &&
+            s.networkKey == networkKey && exit.networkKey == networkKey && now - exit.time in 0 until policy.freshnessMs &&
+            exit.cidr == snapshot.current
+    }
+}
+
 data class FamiliarNetwork(val cidr: Cidr, val days: Int, val visits: Int, val lastSeen: Long, val common: Boolean)
 object NetworkHistory {
     /** Recommendations only: never feeds ownership, whitelist range, deletion, or authorization. */

@@ -102,6 +102,20 @@ class SlotUiTest {
         rule.waitUntil { c.store.load().status == "NO_TOKEN" }
         assertNull(c.store.load().layout); assertNull(c.manualPreview.value)
     }
+    @Test fun authorizingFixedSlotStaysOpenOnWifiBindingStep() {
+        demo(); open(5)
+        rule.onNodeWithText("固定网络").performScrollTo().performClick()
+        rule.onNodeWithText("本机").performScrollTo().performClick()
+        rule.onNodeWithText("保存后可绑定").performScrollTo().assertExists()
+        rule.onNodeWithContentDescription("授权本机管理").performScrollTo().performClick()
+        rule.onNodeWithText("保存").performClick()
+        rule.waitUntil { c.store.load().layout!!.slots.first { it.number == 4 }.authorized }
+        rule.onNodeWithText("完成").assertExists()
+        rule.onNodeWithText("绑定当前 Wi-Fi").performScrollTo().assertIsEnabled()
+        assertNull(c.store.load().layout!!.slots.first { it.number == 4 }.identityId)
+        rule.onNodeWithText("完成").performClick()
+        rule.onNodeWithTag("page-list").assertExists()
+    }
     @Test fun secondAutomaticMobileSlotShowsActionableErrorAndKeepsEditor() {
         demo(); open(5)
         rule.onNodeWithTag("slot-name").performTextReplacement("保留我的输入")

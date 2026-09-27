@@ -1,10 +1,10 @@
 # 安装、升级与恢复
 
-本次产物为本地 0.5.0-preview，versionCode 5，未发布。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
+本次产物为 0.6.0-preview，versionCode 6。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
 
 ## 安装
 
-构建打包后检查 dist/SHA256SUMS-runtime05。使用同证书 APK 覆盖安装保留数据，不卸载、不清数据。自建证书与他人发布包可能不同，签名冲突时保留原安装，先核对来源。
+构建打包后检查 dist/SHA256SUMS-runtime06。使用同证书 APK 覆盖安装保留数据，不卸载、不清数据。自建证书与他人发布包可能不同，签名冲突时保留原安装，先核对来源。
 
 首次默认暂停且仅观察。「设置」页配置 token 并检查连接，「白名单」页按 capacity 编辑稳定槽位。先核对占用并授权，再绑定固定网络或分配本机唯一移动槽。其他手机选择自己的编号；不要共用写入槽。见 [详细设置](SLOTS.md)。
 
@@ -16,9 +16,9 @@
 
 ## 模块
 
-标准模式无需 root。可选模块 ZIP 绑定同次构建的 APK 签名，兼容 APK versionCode 5；旧版模块可能显示版本不匹配并降级。模块协议仍为 1，没有 Wi-Fi 授权、token 或白名单决策。不要把握手等同于成功请求或业务连通。
+标准模式无需 root。可选模块 ZIP 绑定同次构建的 APK 签名，兼容 APK versionCode 6；APK 与模块须同时更新，旧版模块会显示版本不匹配并降级为标准模式。模块协议仍为 1，没有 Wi-Fi 授权、token 或白名单决策。不要把握手等同于成功请求或业务连通。
 
-需要安装时使用同次产物 AllowMate-Runtime-0.5.0-preview.zip；本任务不因产出 ZIP 自动部署到真机。模块详细边界见 [说明](../module/README.md)。
+需要安装时使用同次产物 AllowMate-Runtime-0.6.0-preview.zip。模块详细边界见 [说明](../module/README.md)。
 
 ## 测试与停止
 

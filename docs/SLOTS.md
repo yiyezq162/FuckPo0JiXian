@@ -20,7 +20,7 @@
 
 当前出口已在其他槽时，显示“当前出口已获覆盖，但位于槽 X，目标槽 Y 尚未更新”。没有已审核接口证据，客户端不会试探重复 CIDR 是否搬移、双占或去重；继续保留唯一 CIDR 解析约束。
 
-把移动槽当前出口确认为固定网络不会自动搬移条目。后续移动替换可能造成该固定网络覆盖缺口。绑定确认说明远端位置和风险；用户可在移动槽单独开启“临时保留”，只暂停此槽，之后自行解除。不建立永久借用关系，不自动停掉所有移动同步。
+把移动槽当前出口确认为固定网络不会自动搬移条目。后续移动替换可能造成该固定网络覆盖缺口。绑定确认说明远端位置和风险；用户可在移动槽单独开启“锁定当前 IP”，只暂停此槽的替换，之后自行解除。不建立永久借用关系，不自动停掉所有移动同步。
 
 ## 事务与恢复
 
@@ -42,7 +42,7 @@ journal 不含凭据，绑定账户上下文、配置版本、槽位、操作、
 
 目标 SDK 36；WifiInfo.currentSecurityType 和 FLAG_INCLUDE_LOCATION_INFO 从 API31 提供。实际请求绑定 Network，身份来自同一个默认 Network 的 transportInfo 回调；新鲜时间最长 60 秒。SSID/BSSID、权限、位置总开关及 AP 安全类型都参与验证，同一个 networkHandle 下漫游也取消旧操作。
 
-渐进申请精确位置（同时申请 coarse/fine），不强制后台定位，不请求主动扫描或坐标，不声明 neverForLocation。附近设备权限不是 location-sensitive WifiInfo 的通用替代。仅前台权限在后台可能脱敏，此时安全受阻而非复用可信标记。旧 API、安全类型未知、开放网络和占位字段均不能自动固定匹配。
+渐进申请精确位置（同时申请 coarse/fine），不请求主动扫描或坐标，不声明 neverForLocation。附近设备权限不是 location-sensitive WifiInfo 的通用替代。仅前台权限在后台会被系统脱敏（真机已复现：后台检查返回 WIFI_UNAVAILABLE，AppOps 记录 Reject），此时安全受阻而非复用可信标记。因此固定槽的 Wi-Fi 区提供可选的“后台识别”，申请 ACCESS_BACKGROUND_LOCATION（“始终允许”）；不开启时固定槽只在应用前台识别，移动数据槽不受影响。旧 API、安全类型未知、开放网络和占位字段均不能自动固定匹配。
 
 官方依据（2026-09-27 核对）：
 - https://developer.android.com/reference/android/net/wifi/WifiInfo

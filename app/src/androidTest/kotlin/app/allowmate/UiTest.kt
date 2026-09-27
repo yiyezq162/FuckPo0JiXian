@@ -41,6 +41,8 @@ class UiTest {
             rule.onNodeWithTag("slot-name").performTextReplacement("测试槽 $slot")
             rule.onNodeWithText("保存").performClick()
             rule.waitUntil { controller.store.load().layout?.slots?.any { it.number == slot - 1 && it.name == "测试槽 $slot" } == true }
+            // An authorized fixed slot without Wi-Fi stays open on the binding step.
+            if (rule.onAllNodesWithText("完成").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithText("完成").performClick()
         }
         assertTrue(controller.store.load().paused)
         assertEquals(snapshot, controller.store.load().snapshot)
@@ -92,8 +94,12 @@ class UiTest {
         assertEquals("OBSERVED_MISSING", persisted.status)
         assertEquals(5, persisted.snapshot!!.entries.size)
         assertTrue(persisted.ownership.isEmpty())
+        // A second manual press runs straight away: manual checks skip the automatic loop guard.
+        val first = controller.store.load().lastCheck
         rule.onNodeWithText("立即检查").performClick()
-        rule.waitUntil(5_000) { controller.feedback.value == statusText("RATE_LIMITED") }
+        rule.waitUntil(10_000) { controller.store.load().lastCheck > first && !controller.busy.value }
+        assertEquals("OBSERVED_MISSING", controller.store.load().status)
+        assertEquals(5, controller.store.load().snapshot!!.entries.size)
     }
     @Test fun pauseAndResumeUi() {
         rule.runOnUiThread { controller.store.save(State(demo = true, paused = true)) }

@@ -7,8 +7,8 @@ android {
         applicationId = "app.allowmate"
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0-preview"
+        versionCode = 6
+        versionName = "0.6.0-preview"
         testInstrumentationRunner = "app.allowmate.SafeTestRunner"
     }
     buildFeatures { compose = true }

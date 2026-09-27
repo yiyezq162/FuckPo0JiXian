@@ -72,6 +72,7 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     var editing by rememberSaveable { mutableStateOf<Int?>(null) }
     val scrolls = List(tabs.size) { rememberLazyListState() }
     val colors = Apple.colors
+    val background = rememberBackgroundLocation()
     ManualDialog(c, busy)
     AnimatedContent(editing, Modifier.fillMaxSize().background(colors.background), label = "editor", transitionSpec = {
         if (targetState != null) (slideInVertically { it } + fadeIn()) togetherWith fadeOut()
@@ -95,7 +96,7 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                         }
                         when (page) {
                             0 -> homeItems(s, busy, network, currentKey, history, credential, c, configure = { page = 2 }) { page = 1 }
-                            1 -> slotItems(s, c, busy, edit = { editing = it }) { page = 2 }
+                            1 -> slotItems(s, c, busy, background, edit = { editing = it }) { page = 2 }
                             2 -> po0Items(s, c, credential, busy, requestNotifications)
                             3 -> recordItems(s, history, c)
                         }

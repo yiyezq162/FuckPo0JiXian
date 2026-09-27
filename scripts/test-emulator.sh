@@ -12,7 +12,7 @@ sh scripts/build.sh :core:test :app:assembleDebug :app:assembleDebugAndroidTest 
 "$ADB" -s "$SERIAL" install -r app/build/outputs/apk/debug/app-debug.apk
 "$ADB" -s "$SERIAL" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 mkdir -p .tools
-"$ADB" -s "$SERIAL" shell am instrument -w -e class app.allowmate.UiTest,app.allowmate.SlotUiTest,app.allowmate.RuntimeEvidenceTest,app.allowmate.VisualTest app.allowmate.test/app.allowmate.SafeTestRunner | tee .tools/emulator-tests.log
+"$ADB" -s "$SERIAL" shell am instrument -w -e class app.allowmate.UiTest,app.allowmate.SlotUiTest,app.allowmate.RuntimeEvidenceTest,app.allowmate.WakeTest,app.allowmate.VisualTest app.allowmate.test/app.allowmate.SafeTestRunner | tee .tools/emulator-tests.log
 grep -Eq '^OK \([0-9]+ tests?\)' .tools/emulator-tests.log
 mkdir -p docs/qa/portrait
 "$ADB" -s "$SERIAL" pull /sdcard/Android/data/app.allowmate/files/qa/. docs/qa/portrait/

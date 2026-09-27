@@ -62,7 +62,9 @@ class RuntimeSyncService : Service() {
                     val readOnly = !controller.runtime.validated(epoch)
                     val before = controller.store.load().lastSuccess
                     val requests = NetworkTransport.requests.get()
-                    val code = controller.runCheck(false, observeOnly = readOnly, enhanced = true)
+                    // The module's periodic wake asks for the cheap local comparison; network events do a full check.
+                    val fallback = intent.getStringExtra("trigger") == "fallback"
+                    val code = controller.runCheck(false, observeOnly = readOnly, enhanced = true, fallback = fallback)
                     val complete = controller.store.load().lastSuccess > before && NetworkTransport.requests.get() > requests &&
                         code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING", "FIXED_DRIFT", "MOBILE_SLOT_VERIFIED", "HOME_PINNED_VERIFIED")
                     if (readOnly && complete) controller.runtime.validate(epoch)

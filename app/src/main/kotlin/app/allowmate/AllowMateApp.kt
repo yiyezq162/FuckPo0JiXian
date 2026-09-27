@@ -69,6 +69,8 @@ class Controller(private val context: Context) {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
+            // A new local IPv4 (e.g. mobile data re-attach) usually means a new public exit.
+            override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) = changed()
         }) } catch (_: Exception) { feedback.value = "无法监听网络变化，请手动检查" }
     }
     private fun restoreDemo() {
@@ -89,7 +91,7 @@ class Controller(private val context: Context) {
         currentNetworkKey.value = networkKey(cm.activeNetwork)
         wifiObservation.value = if (store.load().demo) demoWifi() else wifiObserver.latest
         val identity = wifiObserver.latest
-        val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}")
+        val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localIpv4(n)}")
         if (!stability.changed(id, SystemClock.elapsedRealtime())) return@launch
         manualPreview.value = null
         networkId = id
@@ -102,22 +104,39 @@ class Controller(private val context: Context) {
         wm.cancelUniqueWork("catch-up")
         if (n != null) scheduleCheck("network-check")
     } }
+    private fun localIpv4(n: Network?) = n?.let { cm.getLinkProperties(it) }?.linkAddresses
+        ?.mapNotNull { (it.address as? java.net.Inet4Address)?.hostAddress }?.sorted()?.joinToString(",")
     private fun scheduleCheck(name: String, minimumDelay: Long = 0) {
         if (!vault.exists() || physical() == null) return
         val planned = SyncPlanning.delayMs(store.load(), System.currentTimeMillis(), stability.remaining(SystemClock.elapsedRealtime())) ?: return
         val wait = maxOf(planned, minimumDelay)
-        feedback.value = if (wait > policy.debounceMs) "网络已变化，稍后自动检查" else "网络已变化，稳定后自动检查"
+        if (name == "network-check") feedback.value = if (wait > policy.debounceMs) "网络已变化，稍后自动检查" else "网络已变化，正在检查"
         WorkManager.getInstance(context).enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<CheckWorker>().setInitialDelay(wait, TimeUnit.MILLISECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
     }
+    private fun scheduleEnabled(s: State = store.load()) = !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null && vault.exists()
     private fun refreshSchedule() {
         val wm = WorkManager.getInstance(context)
-        if (store.load().paused || store.load().demo || store.load().authBlocked || store.load().globalBlock != null || !vault.exists()) {
-            wm.cancelUniqueWork("fallback"); wm.cancelUniqueWork("network-check"); wm.cancelUniqueWork("catch-up")
-        } else wm.enqueueUniquePeriodicWork("fallback", ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<CheckWorker>(policy.fallbackMinutes, TimeUnit.MINUTES)
-                .setInitialDelay(policy.fallbackMinutes, TimeUnit.MINUTES)
+        if (!scheduleEnabled()) {
+            wm.cancelUniqueWork("fallback"); wm.cancelUniqueWork("fallback-now"); wm.cancelUniqueWork("network-check"); wm.cancelUniqueWork("catch-up")
+            Wake.disable(context)
+        } else {
+            // Alarm chain gives the 10-minute cadence; WorkManager (15-minute floor) is the durable backstop.
+            Wake.enable(context, policy.fallbackMinutes)
+            wm.enqueueUniquePeriodicWork("fallback", ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<CheckWorker>(maxOf(15, policy.fallbackMinutes), TimeUnit.MINUTES)
+                    .setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
+        }
+    }
+    /** Fallback alarm: re-arm first so a failed check never breaks the chain, then run a cheap local comparison. */
+    fun fallbackTick() {
+        if (!scheduleEnabled()) { Wake.disable(context); return }
+        Wake.scheduleFallback(context, policy.fallbackMinutes)
+        WorkManager.getInstance(context).enqueueUniqueWork("fallback-now", ExistingWorkPolicy.KEEP,
+            OneTimeWorkRequestBuilder<CheckWorker>().setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
     }
     private fun drainPendingCheck() {
@@ -162,7 +181,7 @@ class Controller(private val context: Context) {
     }
     private suspend fun updateDomestic(network: Network): Boolean {
         val now = System.currentTimeMillis()
-        val state = store.load().copy(nextProbeAllowed = now + policy.minIntervalMs, probeStatus = "PROBE_RUNNING")
+        val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
         withContext(Dispatchers.IO) { store.save(state) }
         return try {
             val source = ProbeSource.IP3322
@@ -175,7 +194,7 @@ class Controller(private val context: Context) {
             withContext(NonCancellable + Dispatchers.IO) { store.save(state.copy(probeStatus = "NETWORK_CHANGED")) }
             throw e
         } catch (e: Exception) {
-            val wait = maxOf(policy.minIntervalMs, (e as? ApiFailure)?.retryAfterMs ?: 0)
+            val wait = maxOf(60_000, (e as? ApiFailure)?.retryAfterMs ?: 0)
             withContext(Dispatchers.IO) {
                 store.save(state.copy(probeStatus = (e as? ApiFailure)?.code ?: "PROBE_FAILED",
                     nextProbeAllowed = if (Long.MAX_VALUE - now < wait) Long.MAX_VALUE else now + wait))
@@ -183,21 +202,22 @@ class Controller(private val context: Context) {
             false
         }
     }
-    suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, enhanced: Boolean = false): String = withContext(Dispatchers.Main.immediate) {
+    suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, enhanced: Boolean = false,
+                         fallback: Boolean = false): String = withContext(Dispatchers.Main.immediate) {
         val began = SystemClock.elapsedRealtime()
         val requests = NetworkTransport.requests.get()
         val selected = store.load().runtimeMode.name
-        val result = runCheckOnMain(manual, observeOnly, enhanced)
+        val result = runCheckOnMain(manual, observeOnly, enhanced, fallback)
         // Bounded, credential-free evidence for standard/enhanced comparisons. BUSY
         // did not own the gate and must not count another operation's HTTP attempts.
         val count = if (result == "BUSY") 0 else NetworkTransport.requests.get() - requests
         val safeCode = result.takeIf { it.matches(Regex("[A-Z0-9_]{1,64}")) } ?: "UNKNOWN"
-        val path = if (enhanced) "enhanced" else if (manual) "manual" else "workmanager"
+        val path = (if (enhanced) "enhanced" else if (manual) "manual" else "workmanager") + if (fallback) "-fallback" else ""
         android.util.Log.i("AllowMateCheck", "uid=${android.os.Process.myUid()} mode=$selected path=$path " +
             "beginMs=$began endMs=${SystemClock.elapsedRealtime()} httpAttempts=$count result=$safeCode")
         result
     }
-    private suspend fun runCheckOnMain(manual: Boolean, observeOnly: Boolean, enhanced: Boolean): String {
+    private suspend fun runCheckOnMain(manual: Boolean, observeOnly: Boolean, enhanced: Boolean, fallback: Boolean): String {
         if (!gate.tryLock()) { if (!manual) pendingBackground = true; return "BUSY" }
         val thisRequest = currentCoroutineContext()[Job]
         requestJob = thisRequest
@@ -229,17 +249,26 @@ class Controller(private val context: Context) {
                 delay(if (s.demo) 0 else stability.remaining(SystemClock.elapsedRealtime()).coerceAtMost(policy.debounceMs))
                 if (!session.stillCurrent()) return "NETWORK_CHANGED"
             }
+            if (fallback && !manual && !observeOnly && !s.demo) {
+                // Same network as last time: compare the exit locally and leave Po0 alone unless it changed.
+                val now = System.currentTimeMillis()
+                val known = store.load().domesticExit
+                if ((known == null || known.networkKey != session.key || now - known.time >= policy.freshnessMs) &&
+                    now >= store.load().nextProbeAllowed) updateDomestic(n!!)
+                if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, session.key, System.currentTimeMillis(), policy))
+                    return "LOCAL_UNCHANGED"
+            }
             val platform = if (s.demo) demo else Po0Platform(vault::read, NetworkTransport(n!!))
             // Slot writes require a recent observation on this exact Android network.
             // Never turn the domestic result into the API source IP; compare both in SlotSync.
             if ((!observeOnly || previewSlot != null) && !s.demo && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null && !s.paused && !s.authBlocked &&
                 System.currentTimeMillis() >= s.nextAllowed && session.stillCurrent()) {
                 val d = store.load().domesticExit
-                val freshProbe = d != null && d.networkKey == session.key && System.currentTimeMillis() - d.time < policy.minIntervalMs
+                val freshProbe = d != null && d.networkKey == session.key && System.currentTimeMillis() - d.time < policy.freshnessMs
                 if (!freshProbe && System.currentTimeMillis() >= store.load().nextProbeAllowed) updateDomestic(n!!)
                 val observed = store.load().domesticExit
                 session = session.copy(observedCidr = observed?.takeIf {
-                    it.networkKey == session.key && System.currentTimeMillis() - it.time < policy.minIntervalMs &&
+                    it.networkKey == session.key && System.currentTimeMillis() - it.time < policy.freshnessMs &&
                         store.load().probeStatus == "PROBE_OBSERVED"
                 }?.cidr)
                 val candidate = session.observedCidr
@@ -308,15 +337,16 @@ class Controller(private val context: Context) {
     fun runtimeMode(value: RuntimeMode) = edit { it.copy(runtimeMode = value) }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
     fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
-    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit {
+    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit(scheduleNow = true) {
         LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
     }
-    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = edit {
+    // Binding changes what Po0 should hold: drop the local-comparison shortcut and check right away.
+    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = edit(scheduleNow = true) {
         val actual = if (it.demo) demoWifi() else wifiObserver.latest
         require(expected.sameIdentity(actual) && (it.demo || wifiObserver.stillMatches(expected))) { "WIFI_UNAVAILABLE" }
-        LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp)
+        LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp).copy(lastSuccess = 0)
     }
-    fun revokeWifi(slot: Int) = edit { LayoutRules.revoke(it, slot) }
+    fun revokeWifi(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
     fun foreground() {
         wifiObserver.start { changed() }
         manualPreview.value = null
@@ -408,7 +438,15 @@ class Controller(private val context: Context) {
 }
 class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        (applicationContext as AllowMateApp).controller.runCheck(false)
+        (applicationContext as AllowMateApp).controller.runCheck(false, fallback = inputData.getString(TRIGGER) == FALLBACK)
         return Result.success() // Engine owns backoff; no second retry scheduler.
     }
+    /** Expedited work runs as a short foreground service before Android 12. */
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel("runtime", "短时后台检查", NotificationManager.IMPORTANCE_LOW))
+        return ForegroundInfo(3, NotificationCompat.Builder(applicationContext, "runtime").setSmallIcon(R.drawable.ic_stat_allowmate)
+            .setContentTitle("白名单随行正在检查").setContentText("完成后自动退出").build())
+    }
+    companion object { const val TRIGGER = "trigger"; const val FALLBACK = "fallback" }
 }

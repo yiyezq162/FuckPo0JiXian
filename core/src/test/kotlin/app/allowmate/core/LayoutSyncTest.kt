@@ -42,6 +42,15 @@ class LayoutSyncTest {
     private fun session(f: Fake, w: WifiObservation? = wifi(), live: () -> Boolean = { true }) =
         NetworkSession("n", if (w == null) "cellular" else "wifi", true, f.snap.current, w, stillCurrent = live)
     private suspend fun check(st: StateStore, f: Fake, w: WifiObservation? = wifi()) = Engine(st, { clock }).check(f, session(f, w))
+    @Test fun manualCheckSkipsLoopGuardButNotServerRetryAfter() = runTest {
+        val st = MemoryStore(state()); val f = fake(current = home)
+        assertEquals("SLOT_CURRENT", check(st, f))
+        assertEquals("RATE_LIMITED", check(st, f), "automatic triggers keep the loop guard")
+        assertEquals("SLOT_CURRENT", Engine(st, { clock }).check(f, session(f), manual = true))
+        st.save(st.load().copy(status = "HTTP_429", nextAllowed = clock + 600_000))
+        assertEquals("RATE_LIMITED", Engine(st, { clock }).check(f, session(f), manual = true))
+        assertEquals(0, f.writes.size)
+    }
     @Test fun twoFixedNetworksAndCellularOnlyChangeTheirOwnSlots() = runTest {
         val st = MemoryStore(state()); val f = fake(full = true)
         assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(listOf(0), f.writes)

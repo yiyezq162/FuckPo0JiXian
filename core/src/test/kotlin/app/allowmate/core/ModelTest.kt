@@ -51,7 +51,7 @@ class ModelTest {
         assertFalse(Allocation.budgetFits(s, snap))
     }
     @Test fun debounceCoalescesAndDuplicatesDoNotStarve() {
-        val d = Debouncer(); d.changed("a", 0); d.changed("a", 10_000)
+        val d = Debouncer(15_000); d.changed("a", 0); d.changed("a", 10_000)
         assertNull(d.takeDue(14_999)); assertEquals("a", d.takeDue(15_000)); assertNull(d.takeDue(16_000))
         d.changed("b", 16_000); d.changed("c", 20_000)
         assertNull(d.takeDue(31_000)); assertEquals("c", d.takeDue(35_000))
