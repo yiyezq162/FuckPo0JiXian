@@ -17,10 +17,15 @@ dependencies {
     testImplementation(kotlin("test-junit"))
 }
 
+// Egress reads a socket's native handle to pin it to the LAN interface on Windows.
+val nioExports = listOf("--add-exports=java.base/sun.nio.ch=ALL-UNNAMED")
+tasks.test { jvmArgs(nioExports) }
+
 tasks.processResources { inputs.property("version", appVersion); filesMatching("version.txt") { expand("version" to appVersion) } }
 
 compose.desktop.application {
     mainClass = "app.fuckpo0jixian.desktop.MainKt"
+    jvmArgs += nioExports
     nativeDistributions {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Exe)
         packageName = "FuckPo0JiXian"

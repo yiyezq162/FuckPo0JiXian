@@ -82,6 +82,8 @@ fun statusText(code: String): String = when (code) {
     "PROBE_IPV6_ONLY" -> "仅返回 IPv6 地址"
     "STORAGE_RECOVERY_REQUIRED" -> "本地数据无法读取，原文件已保护；请勿清除应用数据"
     "NETWORK_TLS_OR_RESPONSE_ERROR", "NETWORK_OR_STORAGE_ERROR" -> "网络异常，稍后自动重试"
+    "NETWORK_CONNECT_FAILED" -> "连接失败，稍后自动重试"
+    "NETWORK_DNS_FAILED" -> "域名解析失败，稍后自动重试"
     else -> "检查未完成（${code.take(48)}）"
 }
 

@@ -11,6 +11,8 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.*
 import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -37,14 +39,17 @@ class BoundTransport(private val localIp: String) : Transport {
 
     private suspend fun fetch(address: InetAddress, host: String, port: Int, method: String, path: String): HttpReply {
         requests.incrementAndGet()
-        val raw = Socket()
+        val raw = SocketChannel.open().socket()
         // Closing the socket is the only way to interrupt a blocking read when the check is cancelled.
         val closer = currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { raw.close() } }
         try {
-            raw.bind(InetSocketAddress(local, 0))
-            raw.connect(InetSocketAddress(address, port), 10_000)
+            try {
+                Egress.pin(raw.channel, local)
+                raw.bind(InetSocketAddress(local, 0))
+                raw.connect(InetSocketAddress(address, port), 10_000)
+            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; throw ApiFailure("NETWORK_CONNECT_FAILED") }
             raw.soTimeout = 10_000
-            if (raw.localAddress != local) throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
+            if (raw.localAddress != local) throw ApiFailure("NETWORK_CONNECT_FAILED")
             val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, port, true) as SSLSocket
             tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
             return tls.use { socket ->
@@ -68,8 +73,8 @@ class BoundTransport(private val localIp: String) : Transport {
                 .getOrNull()?.firstOrNull { !fakeIp(it) }
         } ?: udpServers.firstNotNullOfOrNull { server -> runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
             // Last resort: the system resolver, unless it answers with a TUN's fake address.
-            ?: InetAddress.getAllByName(host).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) }
-            ?: throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
+            ?: runCatching { InetAddress.getAllByName(host) }.getOrDefault(emptyArray()).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) }
+            ?: throw ApiFailure("NETWORK_DNS_FAILED")
         resolved[host] = Resolved(address, localIp, now)
         return address
     }
@@ -132,7 +137,9 @@ class BoundTransport(private val localIp: String) : Transport {
 
 /** A single A-record query over UDP from the bound address; enough to find where to connect. */
 internal object Dns {
-    fun query(host: String, server: String, local: InetAddress): List<InetAddress> = DatagramSocket(InetSocketAddress(local, 0)).use { s ->
+    fun query(host: String, server: String, local: InetAddress): List<InetAddress> = DatagramChannel.open().socket().use { s ->
+        Egress.pin(s.channel, local)
+        s.bind(InetSocketAddress(local, 0))
         s.soTimeout = 3_000
         val id = (System.nanoTime() and 0xffff).toInt()
         val q = encode(id, host)

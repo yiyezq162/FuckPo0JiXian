@@ -1,6 +1,6 @@
 id=fuckpo0jixian_helper
 name=去他妈的鸡险 · FuckPo0JiXian 辅助入口
-version=0.7.2-preview
-versionCode=10
+version=0.7.3-preview
+versionCode=11
 author=FuckPo0JiXian
 description=辅助后台唤起：网络变化时尝试唤起去他妈的鸡险进行检查，无需让应用一直常驻。不能保证永久保活或休眠时及时同步。（如果您不知道这个是什么，那么就不用理会）

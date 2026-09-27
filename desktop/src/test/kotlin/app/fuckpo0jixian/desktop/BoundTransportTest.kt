@@ -51,6 +51,16 @@ class BoundTransportTest {
         assertEquals(listOf("198.18.0.1" to "utun0", "192.168.5.1" to "en6"), DesktopNetwork.parseNetstatDefault(out))
     }
 
+    /** On Windows (CI included) the pin must really apply, and a pinned request must get an answer. */
+    @Test fun windowsPinsSocketsToTheLanInterface() = runBlocking {
+        if (os != Os.WINDOWS) return@runBlocking
+        val link = DesktopNetwork.read()
+        if (!link.online) return@runBlocking
+        java.nio.channels.SocketChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
+        java.nio.channels.DatagramChannel.open().use { assertTrue(Egress.pin(it, InetAddress.getByName(link.localIp))) }
+        assertEquals(200, BoundTransport(link.localIp!!).execute("GET", "https://1.1.1.1/cdn-cgi/trace").status)
+    }
+
     /** Real request out of the LAN interface. Opt-in: FUCKPO0JIXIAN_LIVE=1. */
     @Test fun liveProbeLeavesThroughTheLanInterface() = runBlocking {
         if (System.getenv("FUCKPO0JIXIAN_LIVE") != "1") return@runBlocking
