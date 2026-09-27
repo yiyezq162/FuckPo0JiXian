@@ -20,6 +20,7 @@ import javax.net.ssl.SSLSocketFactory
  * Network.openConnection. macOS scoped routing and the Windows strong host model then send them out of that
  * interface even while a VPN / TUN (Clash, sing-box …) owns the default route, and the system proxy is never used.
  * Names are resolved the same way, against domestic public DNS, so a TUN's fake-IP DNS cannot redirect them.
+ * DNS-over-HTTPS comes first: a TUN with strict routing (Windows WFP) drops port 53 outside the tunnel, but not 443.
  * Minimal on purpose: GET/POST without body, no redirects, no cookies, 256 KB cap, certificate and host checked.
  */
 class BoundTransport(private val localIp: String) : Transport {
@@ -30,7 +31,11 @@ class BoundTransport(private val localIp: String) : Transport {
         require(uri.scheme == "https" && uri.userInfo == null)
         val host = uri.host
         val port = if (uri.port == -1) 443 else uri.port
-        val address = resolve(host)
+        val path = (uri.rawPath?.ifEmpty { "/" } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
+        fetch(resolve(host), host, port, method, path)
+    }
+
+    private suspend fun fetch(address: InetAddress, host: String, port: Int, method: String, path: String): HttpReply {
         requests.incrementAndGet()
         val raw = Socket()
         // Closing the socket is the only way to interrupt a blocking read when the check is cancelled.
@@ -42,9 +47,8 @@ class BoundTransport(private val localIp: String) : Transport {
             if (raw.localAddress != local) throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
             val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, port, true) as SSLSocket
             tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
-            tls.use { socket ->
+            return tls.use { socket ->
                 socket.startHandshake()
-                val path = (uri.rawPath?.ifEmpty { "/" } ?: "/") + (uri.rawQuery?.let { "?$it" } ?: "")
                 val request = "$method $path HTTP/1.1\r\nHost: $host\r\nAccept: application/json\r\nUser-Agent: FuckPo0JiXian\r\n" +
                     (if (method == "POST") "Content-Length: 0\r\n" else "") + "Connection: close\r\n\r\n"
                 socket.outputStream.apply { write(request.toByteArray(Charsets.US_ASCII)); flush() }
@@ -55,19 +59,32 @@ class BoundTransport(private val localIp: String) : Transport {
         finally { closer?.dispose(); runCatching { raw.close() } }
     }
 
-    private fun resolve(host: String): InetAddress {
+    private suspend fun resolve(host: String): InetAddress {
         if (host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) return InetAddress.getByName(host)
-        for (server in listOf("223.5.5.5", "119.29.29.29")) runCatching { Dns.query(host, server, local) }.getOrNull()
-            ?.firstOrNull { !fakeIp(it) }?.let { return it }
-        // Last resort: the system resolver, unless it answers with a TUN's fake address.
-        return InetAddress.getAllByName(host).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) }
+        val now = System.currentTimeMillis()
+        resolved[host]?.takeIf { it.localIp == localIp && now - it.time < CACHE_MS }?.let { return it.address }
+        val address = dohServers.firstNotNullOfOrNull { server ->
+            runCatching { Dns.parseJson(fetch(InetAddress.getByName(server), server, 443, "GET", "/resolve?name=$host&type=1").body) }
+                .getOrNull()?.firstOrNull { !fakeIp(it) }
+        } ?: udpServers.firstNotNullOfOrNull { server -> runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
+            // Last resort: the system resolver, unless it answers with a TUN's fake address.
+            ?: InetAddress.getAllByName(host).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) }
             ?: throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
+        resolved[host] = Resolved(address, localIp, now)
+        return address
     }
     private fun fakeIp(a: InetAddress) = a.address.let { (it[0].toInt() and 0xff) == 198 && (it[1].toInt() and 0xfe) == 18 }
+
+    private class Resolved(val address: InetAddress, val localIp: String, val time: Long)
 
     companion object {
         val requests = AtomicLong()
         private const val LIMIT = 262_144
+        private const val CACHE_MS = 600_000L
+        /** AliDNS and DNSPod, by address; both serve certificates for their IPs. */
+        private val dohServers = listOf("223.5.5.5", "1.12.12.12")
+        private val udpServers = listOf("223.5.5.5", "119.29.29.29")
+        private val resolved = java.util.concurrent.ConcurrentHashMap<String, Resolved>()
 
         internal fun parse(input: InputStream): HttpReply {
             val status = line(input)?.split(' ')?.getOrNull(1)?.toIntOrNull() ?: throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
@@ -122,6 +139,11 @@ internal object Dns {
         s.send(DatagramPacket(q, q.size, InetSocketAddress(server, 53)))
         val buf = ByteArray(1500); val p = DatagramPacket(buf, buf.size); s.receive(p)
         decode(buf.copyOf(p.length), id)
+    }
+    /** A-record addresses from a DoH JSON reply (Google-style /resolve); CNAME entries are skipped. */
+    internal fun parseJson(body: String): List<InetAddress> {
+        require(Regex(""""Status"\s*:\s*0\b""").containsMatchIn(body))
+        return Regex(""""data"\s*:\s*"(\d{1,3}(?:\.\d{1,3}){3})"""").findAll(body).map { InetAddress.getByName(it.groupValues[1]) }.toList()
     }
     internal fun encode(id: Int, host: String): ByteArray {
         val b = ByteBuffer.allocate(512)

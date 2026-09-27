@@ -30,6 +30,14 @@ class BoundTransportTest {
         assertFailsWith<IllegalArgumentException> { Dns.decode(reply, 0x9999) }
     }
 
+    @Test fun dohJsonKeepsOnlyARecords() {
+        val ali = """{"Status":0,"Question":{"name":"ip.3322.net.","type":1},"Answer":[{"name":"ip.3322.net.","TTL":1387,"type":1,"data":"118.184.169.32"}]}"""
+        val dnspod = """{"Status":0,"Answer":[{"name":"a.example.","type":5,"TTL":60,"data":"b.example."},{"name":"b.example.","type":1,"TTL":60,"data":"203.0.113.9"}]}"""
+        assertEquals(listOf(InetAddress.getByName("118.184.169.32")), Dns.parseJson(ali))
+        assertEquals(listOf(InetAddress.getByName("203.0.113.9")), Dns.parseJson(dnspod))
+        assertFailsWith<IllegalArgumentException> { Dns.parseJson("""{"Status":2,"Answer":[{"data":"203.0.113.9"}]}""") }
+    }
+
     @Test fun netstatDefaultsSkipNothingButKeepOrder() {
         val out = """
             Routing tables

@@ -28,6 +28,7 @@ object RedactedExport {
             putJsonArray("entries") { snap.entries.forEach { e -> add(buildJsonObject { put("slot", e.slot); put("cidr", e.cidr.masked) }) } }
         } }
         put("domesticExit", s.domesticExit?.cidr?.masked)
+        put("probeStatus", s.probeStatus)
         val identities = s.layout?.identities.orEmpty()
         putJsonArray("slots") { s.layout?.slots.orEmpty().sortedBy { it.number }.forEach { slot -> add(buildJsonObject {
             put("number", slot.number); put("name", slot.name); put("purpose", slot.purpose.name); put("writer", slot.writer.name)
