@@ -139,6 +139,10 @@ jobs:
           echo "### 桌面端 ${{ matrix.name }} $version" >> "$GITHUB_STEP_SUMMARY"
           ls dist | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Show packaging log on failure
+        if: failure()
+        run: find desktop/build/compose/logs -name '*.txt' -exec sh -c 'echo "== $1"; tail -n 40 "$1"' _ {} \; || true
+
       - uses: actions/upload-artifact@v7
         with:
           name: FuckPo0JiXian-desktop-${{ matrix.name }}-${{ github.sha }}

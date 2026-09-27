@@ -25,7 +25,8 @@ compose.desktop.application {
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Exe)
         packageName = "FuckPo0JiXian"
         packageVersion = installerVersion
-        description = "自动维护 Po0 的 IPv4 白名单"
+        // Installer metadata stays ASCII: WiX builds the MSI with code page 1252 and rejects Chinese text.
+        description = "Keeps the Po0 IPv4 whitelist up to date"
         vendor = "FuckPo0JiXian"
         modules("java.instrument", "jdk.unsupported", "jdk.crypto.ec", "java.naming")
         macOS {
@@ -35,7 +36,7 @@ compose.desktop.application {
         }
         windows {
             iconFile.set(project.file("icons/icon.ico"))
-            menuGroup = "去他妈的鸡险"
+            menuGroup = "FuckPo0JiXian"
             shortcut = true
             menu = true
             perUserInstall = true
