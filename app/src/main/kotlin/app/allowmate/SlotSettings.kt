@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.HorizontalDivider
@@ -253,7 +254,16 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                             ToggleRow("锁定当前 IP", hold, { hold = it }, subtitle = "网络变化时不替换这一格")
                         }
                     }
-                    Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。请确认没有其他设备在写入此槽。") {
+                    // Show the saved authorization; the switch only grants a new one (and re-bases on this save).
+                    val authorizedNow = original.authorized && purpose == original.purpose && writer == original.writer
+                    if (authorizedNow && !acknowledge) Section(footer = "授权基线：${original.baseline?.value ?: "空槽"}。此槽被其他设备改动时会自动取消授权。") {
+                        ListRow("授权本机管理", trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("已授权", style = Apple.body, color = colors.green)
+                                Icon(Icons.Rounded.Check, null, tint = colors.green, modifier = Modifier.size(20.dp))
+                            }
+                        })
+                    } else Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。请确认没有其他设备在写入此槽。") {
                         ToggleRow("授权本机管理", acknowledge, { acknowledge = it })
                     }
                 }

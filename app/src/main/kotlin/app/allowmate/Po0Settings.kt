@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -132,8 +133,11 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val exempt = remember(lifecycle) { context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
     val colors = Apple.colors
-    Section(header = "后台运行", inset = 58.dp, footer = "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」，" +
-        "并在最近任务中锁定本应用，否则可能被清理。已 root 的设备可改用「模块增强」。") {
+    var hidden by remember { mutableStateOf(Recents.hidden(context)) }
+    Section(header = "后台运行", inset = 58.dp, footer = "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」，否则可能被清理。" +
+        "开启「不显示后台任务」后，一键清理最近任务不会清掉本应用。已 root 的设备可改用「模块增强」。") {
+        ToggleRow("不显示后台任务", hidden, { hidden = it; Recents.set(context, it) },
+            subtitle = "在最近任务中隐藏本应用", leading = { IconTile(Icons.Rounded.Lock, colors.gray) })
         ListRow("电池优化", value = if (exempt) "不受限制" else "受限制", leading = { IconTile(Glyphs.Bolt, colors.orange) })
         if (!exempt) ActionRow("允许在后台运行") {
             runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }

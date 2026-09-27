@@ -102,6 +102,17 @@ class SlotUiTest {
         rule.waitUntil { c.store.load().status == "NO_TOKEN" }
         assertNull(c.store.load().layout); assertNull(c.manualPreview.value)
     }
+    @Test fun authorizedSlotShowsSavedAuthorizationInsteadOfResetSwitch() {
+        demo(); open(3)
+        rule.onNodeWithText("已授权").performScrollTo().assertExists()
+        rule.onNodeWithContentDescription("授权本机管理").assertDoesNotExist()
+        // A different purpose is a new authority: the switch returns, off until granted again.
+        rule.onNodeWithText("固定网络").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("授权本机管理").performScrollTo().assertIsOff()
+        rule.onNodeWithText("已授权").assertDoesNotExist()
+        rule.onNodeWithText("取消").performClick()
+        assertTrue(c.store.load().layout!!.slots.first { it.number == 2 }.authorized)
+    }
     @Test fun authorizingFixedSlotStaysOpenOnWifiBindingStep() {
         demo(); open(5)
         rule.onNodeWithText("固定网络").performScrollTo().performClick()

@@ -65,6 +65,9 @@ class Controller(private val context: Context) {
         if (store.load().demo) restoreDemo()
         wifiObserver.start { changed() }
         refreshSchedule()
+        // An app update finishes cancelling the old install's PendingIntents a few seconds after the new
+        // process starts, taking the fresh network wake with it (seen on device). Re-arm once afterwards.
+        scope.launch { delay(30_000); if (scheduleEnabled()) Wake.enable(context, policy.fallbackMinutes) }
         try { cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
@@ -93,6 +96,10 @@ class Controller(private val context: Context) {
         val identity = wifiObserver.latest
         val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localIpv4(n)}")
         if (!stability.changed(id, SystemClock.elapsedRealtime())) return@launch
+        // Credential- and identity-free timing evidence: network type and the same clock as AllowMateCheck.
+        val type = cm.getNetworkCapabilities(n)?.let { c -> when {
+            c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"; c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"; else -> "other" } } ?: "none"
+        android.util.Log.i("AllowMateNet", "change type=$type atMs=${SystemClock.elapsedRealtime()}")
         manualPreview.value = null
         networkId = id
         operation?.cancel()
@@ -133,7 +140,7 @@ class Controller(private val context: Context) {
     /** Fallback alarm: re-arm first so a failed check never breaks the chain, then run a cheap local comparison. */
     fun fallbackTick() {
         if (!scheduleEnabled()) { Wake.disable(context); return }
-        Wake.scheduleFallback(context, policy.fallbackMinutes)
+        Wake.enable(context, policy.fallbackMinutes)
         WorkManager.getInstance(context).enqueueUniqueWork("fallback-now", ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<CheckWorker>().setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
@@ -215,6 +222,8 @@ class Controller(private val context: Context) {
         val path = (if (enhanced) "enhanced" else if (manual) "manual" else "workmanager") + if (fallback) "-fallback" else ""
         android.util.Log.i("AllowMateCheck", "uid=${android.os.Process.myUid()} mode=$selected path=$path " +
             "beginMs=$began endMs=${SystemClock.elapsedRealtime()} httpAttempts=$count result=$safeCode")
+        // The network has settled by now: arm the one-shot wake for the next change and restart the fallback clock.
+        if (result != "BUSY" && result != "CANCELLED_NETWORK_OR_SETTINGS" && scheduleEnabled()) Wake.enable(context, policy.fallbackMinutes)
         result
     }
     private suspend fun runCheckOnMain(manual: Boolean, observeOnly: Boolean, enhanced: Boolean, fallback: Boolean): String {
@@ -348,6 +357,7 @@ class Controller(private val context: Context) {
     }
     fun revokeWifi(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
     fun foreground() {
+        refreshSchedule()
         wifiObserver.start { changed() }
         manualPreview.value = null
         changed()

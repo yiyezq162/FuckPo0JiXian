@@ -27,6 +27,8 @@ class WakeTest {
             Wake.enable(context, 10) // re-arming must replace, not stack
             assertEquals(1, fallbackAlarms())
             assertEquals(1, networkListens())
+            Thread.sleep(15_000) // must persist, not just exist right after registering
+            assertEquals(1, networkListens())
             val alarm = shell("dumpsys alarm").lines().dropWhile { !it.trim().startsWith("tag=*walarm*:${Wake.ACTION_FALLBACK}") }.take(2).joinToString()
             assertTrue(alarm, alarm.contains("ELAPSED_WAKEUP"))
         } finally { Wake.disable(context) }

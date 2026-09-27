@@ -1,6 +1,8 @@
 package app.allowmate
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -41,7 +43,7 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    override fun onResume() { super.onResume(); (application as AllowMateApp).controller.foreground() }
+    override fun onResume() { super.onResume(); Recents.apply(this); (application as AllowMateApp).controller.foreground() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -50,6 +52,17 @@ class MainActivity : ComponentActivity() {
         setContent { AllowMateTheme { AllowMate(controller) {
             if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } } }
+    }
+}
+
+/** Optional: keep the task out of the recents screen so "clear all" there cannot kill the app. */
+internal object Recents {
+    private fun prefs(context: Context) = context.getSharedPreferences("ui", Context.MODE_PRIVATE)
+    fun hidden(context: Context) = prefs(context).getBoolean("hide_recents", false)
+    fun set(context: Context, value: Boolean) { prefs(context).edit().putBoolean("hide_recents", value).apply(); apply(context) }
+    fun apply(context: Context) {
+        val hide = hidden(context)
+        context.getSystemService(ActivityManager::class.java).appTasks.forEach { runCatching { it.setExcludeFromRecents(hide) } }
     }
 }
 

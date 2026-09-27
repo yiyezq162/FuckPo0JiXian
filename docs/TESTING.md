@@ -7,7 +7,8 @@
 | JVM | 112 项通过，新增：兜底跳过 Po0 的判定条件、手动检查绕过防循环但遵守 429、默认节奏 |
 | API36 ARM64 专用模拟器 | 23 项通过，新增 WakeTest：由系统 dumpsys 确认兜底闹钟与网络唤起各登记一份、重复登记不叠加、暂停或无 Token 时全部撤销 |
 | 构建 | Debug / Preview + R8 / Preview Lint 通过；APK 与模块版本号一致性由 package.sh 检查 |
-| OPPO PKU110 Android 16 真机（0.5.0） | 复现后台脱敏：仅前台位置权限时，后台检查返回 WIFI_UNAVAILABLE，同时 AppOps 记录 Reject；0.6 的真机唤起与后台识别验证待完成 |
+| OPPO PKU110 Android 16 真机（0.5.0） | 复现后台脱敏：仅前台位置权限时，后台检查返回 WIFI_UNAVAILABLE，同时 AppOps 记录 Reject |
+| OPPO PKU110 Android 16 真机（0.6 后续修正） | 应用在后台、未打开：移动数据重连两次，均在网络变化后约 3 秒开始检查、约 9 秒内完成移动槽写入与核对（SLOT_UPDATED）；本机 IPv4 变化同样触发。发现并修正网络 PendingIntent 为一次性（发送后约 5 秒被系统释放，模拟器同样复现），改为按当前网络只等待“下一次变化”，并在检查完成、启动、打开和兜底时重新登记；登记在真机上持续有效。“不显示后台任务”经 dumpsys 与最近任务界面确认生效。已授权槽位显示“已授权”。固定 Wi-Fi 槽的后台切换未在本轮单独计时 |
 
 # 0.5.0-preview 验证记录
 
