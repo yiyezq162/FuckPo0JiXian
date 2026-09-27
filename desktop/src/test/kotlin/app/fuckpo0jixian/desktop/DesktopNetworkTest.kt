@@ -66,6 +66,18 @@ class DesktopNetworkTest {
         assertEquals("other", link.copy(gatewayMac = null).kind)
     }
 
+    @Test fun windowsSkipsClashTunDefaultRoute() {
+        val routes = listOf(
+            DesktopNetwork.WinRoute("0.0.0.0", "0.0.0.0", "198.18.0.2", "198.18.0.1", 0),
+            DesktopNetwork.WinRoute("0.0.0.0", "0.0.0.0", "10.8.0.1", "10.8.0.6", 5),
+            DesktopNetwork.WinRoute("0.0.0.0", "0.0.0.0", "192.168.1.1", "192.168.1.23", 25))
+        val names = mapOf("10.8.0.6" to "wg0 WireGuard Tunnel", "192.168.1.23" to "Ethernet Realtek PCIe GbE")
+        assertEquals("192.168.1.1", DesktopNetwork.pickWindowsDefault(routes, names::get) { it == "192.168.1.1" }?.gateway)
+        // No ARP answer anywhere (e.g. arp failed): still never the TUN.
+        assertEquals("192.168.1.1", DesktopNetwork.pickWindowsDefault(routes, names::get) { false }?.gateway)
+        assertNull(DesktopNetwork.pickWindowsDefault(routes.take(1), names::get) { true })
+    }
+
     /** Reads this machine's real routing table; skipped where there is no network. */
     @Test fun liveReadIsConsistent() {
         val link = DesktopNetwork.read()

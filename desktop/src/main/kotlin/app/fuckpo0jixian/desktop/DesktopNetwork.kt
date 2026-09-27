@@ -48,11 +48,29 @@ object DesktopNetwork {
             (primary ?: parseNetstatDefault(run("netstat", "-rn", "-f", "inet")).firstOrNull { !tunnel.matches(it.second) })
                 ?.let { (gw, iface) -> Route(gw, iface, iface?.let(::interfaceIpv4)) }
         }
-        Os.WINDOWS -> parseWindowsRoutes(run("route", "print", "-4", "0.0.0.0")).let { routes ->
-            // A VPN/TUN usually takes over with 0.0.0.0/1 + 128.0.0.0/1; the path check catches that too.
-            routes.filter { it.mask == "0.0.0.0" && ipv4.matches(it.gateway) }.minByOrNull { it.metric }
-                ?.let { Route(it.gateway, NetworkInterface.getByInetAddress(InetAddress.getByName(it.iface))?.name, it.iface) }
+        Os.WINDOWS -> {
+            val names = { ip: String -> runCatching { NetworkInterface.getByInetAddress(InetAddress.getByName(ip)) }.getOrNull() }
+            pickWindowsDefault(parseWindowsRoutes(run("route", "print", "-4", "0.0.0.0")),
+                name = { ip -> names(ip)?.let { "${it.name} ${it.displayName}" } },
+                hasMac = { gw -> runCatching { gatewayMac(gw, null) }.getOrNull() != null })
+                ?.let { Route(it.gateway, names(it.iface)?.name, it.iface) }
         }
+    }
+
+    /** Clash / sing-box fake-IP and TUN addresses (198.18.0.0/15); never a home or office router. */
+    internal fun tunAddress(ip: String) = ip.split('.').let { it.size == 4 && it[0] == "198" && (it[1] == "18" || it[1] == "19") }
+    private val virtualAdapter = Regex("(?i)wintun|tap-|tap\\b|wireguard|clash|mihomo|meta tunnel|sing-box|sing-tun|tailscale|zerotier|vpn|tunnel")
+
+    /**
+     * A Windows TUN (Clash, sing-box …) installs its own 0.0.0.0/0 with the lowest metric, e.g. via 198.18.0.2.
+     * Binding to it would send the probe and Po0 requests through the proxy. Skip tunnel addresses and adapters,
+     * and prefer a gateway that answers ARP: a real router has a MAC address, a TUN's virtual gateway has none.
+     */
+    internal fun pickWindowsDefault(routes: List<WinRoute>, name: (String) -> String?, hasMac: (String) -> Boolean): WinRoute? {
+        val candidates = routes.filter { it.mask == "0.0.0.0" && ipv4.matches(it.gateway) && !tunAddress(it.gateway) && !tunAddress(it.iface) }
+            .filterNot { r -> name(r.iface)?.let(virtualAdapter::containsMatchIn) == true }
+            .sortedBy { it.metric }
+        return candidates.firstOrNull { hasMac(it.gateway) } ?: candidates.firstOrNull()
     }
 
     private fun interfaceIpv4(name: String): String? = NetworkInterface.getByName(name)?.inetAddresses?.toList()
