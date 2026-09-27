@@ -13,7 +13,7 @@ object RedactedExport {
     private val pretty = Json { prettyPrint = true }
     private fun time(value: Long) = if (value <= 0) JsonNull else JsonPrimitive(Instant.ofEpochMilli(value).toString())
 
-    fun build(s: State, platform: String, appVersion: String, now: Long): String = pretty.encodeToString(JsonObject.serializer(), buildJsonObject {
+    fun build(s: State, platform: String, appVersion: String, now: Long, trace: List<String> = emptyList()): String = pretty.encodeToString(JsonObject.serializer(), buildJsonObject {
         put("format", FORMAT); put("version", 1); put("note", NOTE)
         put("exportedAt", time(now))
         putJsonObject("device") { put("name", s.deviceName); put("platform", platform); put("app", appVersion) }
@@ -46,6 +46,7 @@ object RedactedExport {
             put("cidr", n.cidr.masked); put("days", n.days); put("visits", n.visits); put("common", n.common)
         }) } }
         putJsonArray("events") { s.events.takeLast(50).forEach { e -> add(buildJsonObject { put("time", time(e.time)); put("code", e.code) }) } }
+        if (trace.isNotEmpty()) putJsonArray("trace") { trace.forEach { add(it) } }
     })
 }
 

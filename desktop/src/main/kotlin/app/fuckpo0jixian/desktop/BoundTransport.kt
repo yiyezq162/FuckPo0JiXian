@@ -42,25 +42,29 @@ class BoundTransport(private val localIp: String) : Transport {
         val raw = SocketChannel.open().socket()
         // Closing the socket is the only way to interrupt a blocking read when the check is cancelled.
         val closer = currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { raw.close() } }
+        var stage = "connect"
+        var pinned = false
         try {
             try {
-                Egress.pin(raw.channel, local)
+                pinned = Egress.pin(raw.channel, local)
                 raw.bind(InetSocketAddress(local, 0))
                 raw.connect(InetSocketAddress(address, port), 10_000)
-            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; throw ApiFailure("NETWORK_CONNECT_FAILED") }
+            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; note(host, stage, pinned, e); throw ApiFailure("NETWORK_CONNECT_FAILED") }
             raw.soTimeout = 10_000
             if (raw.localAddress != local) throw ApiFailure("NETWORK_CONNECT_FAILED")
+            stage = "tls"
             val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, port, true) as SSLSocket
             tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
             return tls.use { socket ->
                 socket.startHandshake()
+                stage = "response"
                 val request = "$method $path HTTP/1.1\r\nHost: $host\r\nAccept: application/json\r\nUser-Agent: FuckPo0JiXian\r\n" +
                     (if (method == "POST") "Content-Length: 0\r\n" else "") + "Connection: close\r\n\r\n"
                 socket.outputStream.apply { write(request.toByteArray(Charsets.US_ASCII)); flush() }
-                parse(socket.inputStream)
+                parse(socket.inputStream).also { note(host, "ok", pinned, null) }
             }
         } catch (e: ApiFailure) { throw e }
-        catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR") }
+        catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; note(host, stage, pinned, e); throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR") }
         finally { closer?.dispose(); runCatching { raw.close() } }
     }
 
@@ -68,19 +72,28 @@ class BoundTransport(private val localIp: String) : Transport {
         if (host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) return InetAddress.getByName(host)
         val now = System.currentTimeMillis()
         resolved[host]?.takeIf { it.localIp == localIp && now - it.time < CACHE_MS }?.let { return it.address }
+        var via = "doh"
         val address = dohServers.firstNotNullOfOrNull { server ->
             runCatching { Dns.parseJson(fetch(InetAddress.getByName(server), server, 443, "GET", "/resolve?name=$host&type=1").body) }
                 .getOrNull()?.firstOrNull { !fakeIp(it) }
-        } ?: udpServers.firstNotNullOfOrNull { server -> runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
+        } ?: udpServers.firstNotNullOfOrNull { server -> via = "udp"; runCatching { Dns.query(host, server, local) }.getOrNull()?.firstOrNull { !fakeIp(it) } }
             // Last resort: the system resolver, unless it answers with a TUN's fake address.
-            ?: runCatching { InetAddress.getAllByName(host) }.getOrDefault(emptyArray()).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) }
-            ?: throw ApiFailure("NETWORK_DNS_FAILED")
+            ?: run { via = "system"; runCatching { InetAddress.getAllByName(host) }.getOrDefault(emptyArray()).filterIsInstance<Inet4Address>().firstOrNull { !fakeIp(it) } }
+            ?: run { note(host, "dns", false, null); throw ApiFailure("NETWORK_DNS_FAILED") }
+        note(host, "dns-$via", false, null)
         resolved[host] = Resolved(address, localIp, now)
         return address
     }
     private fun fakeIp(a: InetAddress) = a.address.let { (it[0].toInt() and 0xff) == 198 && (it[1].toInt() and 0xfe) == 18 }
 
     private class Resolved(val address: InetAddress, val localIp: String, val time: Long)
+
+    private fun note(host: String, stage: String, pinned: Boolean, error: Exception?) {
+        val cause = error?.let { e -> generateSequence<Throwable>(e) { it.cause }.take(3).joinToString(" <- ") { "${it.javaClass.simpleName}: ${it.message.orEmpty().take(120)}" } }
+        val line = "${java.time.Instant.now()} ${maskIps(host)} $stage" + (if (os == Os.WINDOWS && !stage.startsWith("dns")) " pin=$pinned" else "") +
+            (cause?.let { " ${maskIps(it)}" } ?: "")
+        synchronized(trace) { trace.addLast(line); while (trace.size > 12) trace.removeFirst() }
+    }
 
     companion object {
         val requests = AtomicLong()
@@ -90,6 +103,10 @@ class BoundTransport(private val localIp: String) : Transport {
         private val dohServers = listOf("223.5.5.5", "1.12.12.12")
         private val udpServers = listOf("223.5.5.5", "119.29.29.29")
         private val resolved = java.util.concurrent.ConcurrentHashMap<String, Resolved>()
+        private val trace = ArrayDeque<String>()
+        /** The latest requests of this run, IPs kept to /16 like the rest of the redacted export. */
+        fun trace(): List<String> = synchronized(trace) { trace.toList() }
+        internal fun maskIps(text: String) = text.replace(Regex("""\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b""")) { "${it.groupValues[1]}.*.*" }
 
         internal fun parse(input: InputStream): HttpReply {
             val status = line(input)?.split(' ')?.getOrNull(1)?.toIntOrNull() ?: throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")

@@ -21,6 +21,10 @@ class BoundTransportTest {
         assertFailsWith<ApiFailure> { http("garbage") }
     }
 
+    @Test fun traceKeepsAddressesToSixteenBits() {
+        assertEquals("connect to 124.221.*.* failed", BoundTransport.maskIps("connect to 124.221.69.228 failed"))
+    }
+
     @Test fun dnsQueryRoundTrips() {
         val q = Dns.encode(0x1234, "ip.3322.net")
         // Build a reply: header with answer count 1, the question, then one compressed A record.

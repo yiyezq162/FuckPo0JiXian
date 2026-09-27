@@ -203,7 +203,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             PeerImport.apply(it, peer).also { r -> count = r.changed.size }.state
         }
     }
-    fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, System.currentTimeMillis())
+    fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, System.currentTimeMillis(), BoundTransport.trace())
     fun saveToken(value: String) = edit {
         val sameAccount = runCatching { vault.read() }.getOrNull() == value.trim()
         vault.save(value.trim())
