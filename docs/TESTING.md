@@ -1,4 +1,4 @@
-# 0.6.1-preview 说明
+# 0.7.0-preview 说明
 
 项目由「白名单随行 / AllowMate」改名为「去他妈的鸡险 / FuckPo0JiXian」：应用包名 app.fuckpo0jixian、模块 ID fuckpo0jixian_helper、代码包名同步修改，签名证书不变。功能与 0.6 后续修正相同（一次性网络唤起修正、已授权显示、不显示后台任务），验证见下方 0.6.0 记录；改名后在专用模拟器重新执行全部测试。
 

@@ -2,9 +2,9 @@
 
 [![Build](https://github.com/yiyezq162/FuckPo0JiXian/actions/workflows/build.yml/badge.svg)](https://github.com/yiyezq162/FuckPo0JiXian/actions/workflows/build.yml)
 
-自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，FuckPo0JiXian 会把对应的白名单槽位更新成新的 /24 网段。Android 9+，标准模式无需 root。
+自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，FuckPo0JiXian 会把对应的白名单槽位更新成新的 /24 网段。Android 9+（标准模式无需 root），以及 macOS / Windows 桌面端。
 
-> 当前源码为 **0.6.1-preview**，属于测试预发布，不是稳定正式版。
+> 当前源码为 **0.7.0-preview**，属于测试预发布，不是稳定正式版。
 
 ## 下载
 
@@ -16,6 +16,9 @@
 | `FuckPo0JiXian-Runtime-<版本>.zip` | 可选的 Magisk / KernelSU 模块，标准模式不需要 |
 | `FuckPo0JiXian-<版本>-debug.apk` | 仅供开发调试 |
 | `SHA256SUMS-runtime*` | 以上文件的校验和 |
+| `FuckPo0JiXian-Desktop-<版本>-macos-arm64.dmg` | Mac（Apple 芯片）桌面端 |
+| `FuckPo0JiXian-Desktop-<版本>-windows-x64.msi` / `.exe` | Windows 桌面端，二选一 |
+| `SHA256SUMS-desktop-*` | 桌面端校验和 |
 
 预览版使用同一开发证书签名，同名应用可直接覆盖升级。不要为了解决签名冲突而卸载，否则会丢失本机配置。
 
@@ -32,6 +35,23 @@
 4. **设置** → 开启自动同步，再到 **概览** 恢复检查。
 
 没绑定 Wi-Fi 的固定槽也可以在槽位页用“手动更新一次”，现场核对后更新一次。更多细节见 [槽位说明](docs/SLOTS.md)。
+
+## 多台设备
+
+Po0 没有备注字段，也不区分是谁写的，所以各设备之间不通信：**每台设备只授权自己负责的槽位**，其他槽位标为“其他设备”并写上设备名（如 Mac、Windows），被改动时显示“其他设备已更新”。
+
+- 家里的手机和电脑想一起维护“家”这一格：两边都授权这一格并打开“与其他设备共管”，谁先发现出口变化谁更新，另一台会跟上而不是报冲突。
+- 「导出脱敏数据」（不含 Token、账户标识、Wi-Fi 与路由器信息，IP 只保留前两段）可用于复盘；在另一台设备上「从剪贴板导入」，会自动标注导出方管理的槽位，不授权、不写入。
+
+## 桌面端（macOS / Windows）
+
+设置方式与手机相同：添加 Token → 在白名单里给本机负责的槽位授权 → 固定网络点“绑定当前网络” → 打开自动同步。关闭窗口后在菜单栏 / 托盘继续运行，可在设置里开启开机启动。
+
+- **按路由器识别网络**（默认网关及其 MAC 地址），有线、Wi-Fi 都适用，不需要定位权限。换路由器后重新绑定。
+- **请求直接走本机网卡**：Po0 查询、国内出口查询及其 DNS 都绑定在物理网卡上，不受系统代理和 Clash 等 VPN / TUN 影响，也就不会把代理节点的 IP 写进白名单。
+- “外出跟随”槽适合笔记本：在未绑定的网络上跟随本机出口。
+- Token 保存在 macOS 钥匙串 / Windows DPAPI 中。
+- 预览版未签名：Mac 首次打开请右键 →“打开”；Windows 可能出现 SmartScreen 提示，选择“仍要运行”。
 
 ## 安全设计
 
@@ -65,10 +85,12 @@ Token 由 Android Keystore 加密；状态和 Wi-Fi 授权存放在不参与备�
 
 需要 JDK 17 与 Android SDK（Compile/Target SDK 36，Build Tools 36.0.0，Min SDK 28）。设置 `JAVA_HOME` / `ANDROID_HOME`，脚本也会使用 `.tools/` 下的本地 JDK。
 
+桌面端（Compose Multiplatform，与安卓共用 `core`）只需 JDK 17：`sh scripts/build.sh :desktop:run` 直接运行，`:desktop:packageDmg` 在 Mac 上打包；Windows 安装包只能在 Windows 上打（CI 已包含）。
+
 ```sh
 sh scripts/build.sh :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
 sh scripts/package.sh
-(cd dist && shasum -a 256 -c SHA256SUMS-runtime06)
+(cd dist && shasum -a 256 -c SHA256SUMS-runtime07)
 ```
 
 产物在 `dist/`，文件名中的版本号取自 `app/build.gradle.kts`。
@@ -81,7 +103,7 @@ sh scripts/test-emulator.sh
 
 ### 自动构建与发布
 
-GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在每次推送和 Pull Request 时运行核心测试与 Lint，构建 APK 和模块 ZIP，结果可在 Actions 页面下载（保留 30 天）。
+GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在每次推送和 Pull Request 时运行核心测试与 Lint，构建 APK 和模块 ZIP，并分别在 macOS / Windows 上测试和打包桌面端，结果可在 Actions 页面下载（保留 30 天）。
 
 发布新版本：
 

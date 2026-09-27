@@ -3,4 +3,5 @@ plugins {
     kotlin("android") version "2.2.21" apply false
     kotlin("jvm") version "2.2.21" apply false
     kotlin("plugin.compose") version "2.2.21" apply false
+    id("org.jetbrains.compose") version "1.9.3" apply false
 }

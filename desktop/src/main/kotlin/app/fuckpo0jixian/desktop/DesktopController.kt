@@ -1,0 +1,236 @@
+package app.fuckpo0jixian.desktop
+
+import app.fuckpo0jixian.core.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.UUID
+
+/**
+ * Desktop counterpart of the Android controller. The desktop stays on while it runs, so instead of system wake-ups
+ * it polls the local network every few seconds (no Po0 request) and applies the same 3 s / 10 min / 1 h cadence.
+ */
+class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create()) {
+    val policy = Policy()
+    private val engine = Engine(store, policy = policy)
+    val busy = MutableStateFlow(false)
+    val feedback = MutableStateFlow("")
+    val link = MutableStateFlow<DesktopLink?>(null)
+    val credentialPresent = MutableStateFlow(runCatching { vault.exists() }.getOrDefault(false))
+    val manualPreview = MutableStateFlow<ManualPermit?>(null)
+    /** Problems worth a system notification, already worded for people. */
+    val alerts = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val gate = Mutex()
+    private var operation: Job? = null
+    private var followUp: Job? = null
+    private var previewSlot: Int? = null
+    val version: String = javaClass.getResource("/version.txt")?.readText()?.trim() ?: "dev"
+
+    fun start() {
+        if (store.load().deviceName.isBlank()) runCatching {
+            store.save(store.load().copy(deviceName = when (os) { Os.MAC -> "Mac"; Os.WINDOWS -> "Windows"; Os.OTHER -> "电脑" }))
+        }
+        scope.launch { monitor() }
+    }
+
+    private fun scheduleEnabled(s: State = store.load()) = !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null && credentialPresent.value
+
+    private suspend fun monitor() {
+        var lastKey: String? = null
+        var lastTick = System.currentTimeMillis()
+        var lastFallback = lastTick
+        while (currentCoroutineContext().isActive) {
+            val current = runCatching { withContext(Dispatchers.IO) { DesktopNetwork.read() } }.getOrNull()
+            link.value = current
+            val now = System.currentTimeMillis()
+            // A long gap between ticks means the computer slept; the network may have changed underneath.
+            val woke = now - lastTick > 60_000
+            lastTick = now
+            if (current?.key != lastKey || woke) {
+                lastKey = current?.key
+                manualPreview.value = null
+                if (current?.online == true && scheduleEnabled()) {
+                    feedback.value = "网络已变化，正在检查"
+                    delay(policy.debounceMs)
+                    if (runCatching { withContext(Dispatchers.IO) { DesktopNetwork.read() } }.getOrNull()?.key == lastKey) {
+                        launchCheck(manual = false); lastFallback = System.currentTimeMillis()
+                    }
+                }
+            } else if (now - lastFallback >= policy.fallbackMinutes * 60_000 && current?.online == true && scheduleEnabled()) {
+                lastFallback = now
+                launchCheck(manual = false, fallback = true)
+            }
+            delay(5_000)
+        }
+    }
+
+    private fun launchCheck(manual: Boolean, observeOnly: Boolean = false, fallback: Boolean = false) {
+        if (operation?.isActive == true) return
+        operation = scope.launch { runCheck(manual, observeOnly, fallback) }
+    }
+    fun check() = launchCheck(manual = true)
+    fun checkConnection() = launchCheck(manual = true, observeOnly = true)
+
+    private suspend fun updateDomestic(l: DesktopLink): Boolean {
+        val now = System.currentTimeMillis()
+        val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
+        withContext(Dispatchers.IO) { store.save(state) }
+        return try {
+            val reply = BoundTransport(l.localIp!!).execute("GET", ProbeSource.IP3322.url)
+            val observed = DomesticProbe.parse(reply, now, l.key, ProbeSource.IP3322)
+            withContext(Dispatchers.IO) { store.save(store.load().copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
+            true
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            val wait = maxOf(60_000, (e as? ApiFailure)?.retryAfterMs ?: 0)
+            withContext(Dispatchers.IO) { store.save(store.load().copy(probeStatus = (e as? ApiFailure)?.code ?: "PROBE_FAILED",
+                nextProbeAllowed = if (Long.MAX_VALUE - now < wait) Long.MAX_VALUE else now + wait)) }
+            false
+        }
+    }
+
+    suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, fallback: Boolean = false): String {
+        if (!gate.tryLock()) return "BUSY"
+        busy.value = true
+        try {
+            val s = store.load()
+            if (!credentialPresent.value) { feedback.value = statusText("NO_TOKEN"); return "NO_TOKEN" }
+            val l = withContext(Dispatchers.IO) { DesktopNetwork.read() }
+            link.value = l
+            if (!l.online) { feedback.value = "当前没有可用网络"; return "OFFLINE" }
+            // Every request of this check leaves through this interface, whatever VPN / TUN / proxy is running.
+            val transport = BoundTransport(l.localIp!!)
+            val permit = manualPreview.value
+            fun same() = runCatching { DesktopNetwork.read() }.getOrNull()?.key == l.key
+            var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(System.currentTimeMillis()), manualPermit = permit) { same() }
+            if (fallback && !manual && !observeOnly) {
+                val known = store.load().domesticExit
+                val now = System.currentTimeMillis()
+                if ((known == null || known.networkKey != l.key || now - known.time >= policy.freshnessMs) && now >= store.load().nextProbeAllowed) updateDomestic(l)
+                if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, l.key, System.currentTimeMillis(), policy)) return "LOCAL_UNCHANGED"
+            }
+            val platform = Po0Platform(vault::read, transport)
+            if ((!observeOnly || previewSlot != null) && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null &&
+                !s.paused && !s.authBlocked && System.currentTimeMillis() >= s.nextAllowed) {
+                val d = store.load().domesticExit
+                val fresh = d != null && d.networkKey == l.key && System.currentTimeMillis() - d.time < policy.freshnessMs
+                if (!fresh && System.currentTimeMillis() >= store.load().nextProbeAllowed) updateDomestic(l)
+                val observed = store.load().domesticExit?.takeIf {
+                    it.networkKey == l.key && System.currentTimeMillis() - it.time < policy.freshnessMs && store.load().probeStatus == "PROBE_OBSERVED"
+                }?.cidr
+                session = session.copy(observedCidr = observed, revalidate = {
+                    val again = withContext(Dispatchers.IO) { DesktopNetwork.read() }
+                    val exit = DomesticProbe.parse(transport.execute("GET", ProbeSource.IP3322.url), System.currentTimeMillis(), l.key, ProbeSource.IP3322)
+                    again.key == l.key && exit.cidr == observed
+                })
+            }
+            val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
+            if (!observeOnly) manualPreview.value = null
+            val after = store.load()
+            previewSlot?.let { number ->
+                val slot = after.layout?.slots?.find { it.number == number }
+                if (code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING") && !after.paused && slot?.purpose == SlotPurpose.FIXED &&
+                    slot.writer == Writer.LOCAL && slot.authorized && session.observedCidr == after.snapshot?.current && same()) {
+                    manualPreview.value = ManualPermit(after.accountContext, after.layout!!.version, number, l.key, session.wifi,
+                        after.snapshot!!, System.currentTimeMillis() + 180_000)
+                } else feedback.value = "无法预览：请确认已恢复检查、此槽已授权且出口未变"
+            }
+            if (!after.paused && after.lastCheck > s.lastCheck && System.currentTimeMillis() >= after.nextProbeAllowed &&
+                (manual || after.domesticExit?.networkKey != l.key || System.currentTimeMillis() - (after.domesticExit?.time ?: 0) >= policy.cacheMs)) {
+                updateDomestic(l)
+            }
+            feedback.value = statusText(code)
+            if (!manual && SyncPlanning.needsFollowUp(code, store.load())) scheduleFollowUp()
+            if (observeOnly && after.mode == Mode.AUTO && after.layout != null && !after.paused && code == "OBSERVED_MISSING" && previewSlot == null)
+                scheduleFollowUp()
+            if (code in listOf("HTTP_401", "HTTP_403", "CAPACITY_FULL", "SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "COVERED_OTHER_SLOT",
+                    "IDENTITY_AMBIGUOUS", "PENDING_REVIEW", "SHARED_RECENT")) {
+                val latest = store.load()
+                val marker = "NOTIFIED:$code:${latest.layout?.version}"
+                if (latest.layout != null && marker !in latest.layout!!.notices) {
+                    store.save(latest.copy(layout = latest.layout!!.copy(notices = (latest.layout!!.notices + marker).toList().takeLast(100).toSet())))
+                    alerts.tryEmit(statusText(code))
+                }
+            }
+            return code
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { feedback.value = "无法读取本地数据，已停止检查"; return "LOCAL_ERROR" }
+        finally { busy.value = false; gate.unlock() }
+    }
+
+    private fun scheduleFollowUp() {
+        followUp?.cancel()
+        followUp = scope.launch {
+            delay(maxOf(policy.debounceMs, store.load().nextAllowed - System.currentTimeMillis()))
+            if (scheduleEnabled()) launchCheck(manual = false)
+        }
+    }
+
+    private fun edit(scheduleNow: Boolean = false, done: () -> String = { "已保存" }, block: (State) -> State) {
+        scope.launch {
+            manualPreview.value = null
+            operation?.cancelAndJoin()
+            gate.withLock {
+                try { withContext(Dispatchers.IO) { store.save(block(store.load())) }; feedback.value = done() }
+                catch (e: IllegalArgumentException) { feedback.value = statusText(e.message ?: "CONFIG_INVALID") }
+                catch (_: Exception) { feedback.value = "保存失败" }
+            }
+            if (scheduleNow && scheduleEnabled()) launchCheck(manual = false)
+        }
+    }
+    fun pause(value: Boolean) = edit(scheduleNow = !value) { it.copy(paused = value) }
+    fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
+    fun deviceName(value: String) = edit { it.copy(deviceName = value.trim().take(24)) }
+    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit(scheduleNow = true) {
+        LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
+    }
+    /** Binds the router this computer is connected to right now. */
+    fun bindNetwork(slot: Int, name: String) = edit(scheduleNow = true) {
+        val observation = DesktopNetwork.read().observation(System.currentTimeMillis())
+        require(observation != null) { "GATEWAY_UNAVAILABLE" }
+        LayoutRules.bind(it, slot, observation, System.currentTimeMillis(), name, false).copy(lastSuccess = 0)
+    }
+    fun revokeNetwork(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
+    fun importPeers(peer: PeerLayout) {
+        var count = 0
+        edit(done = { if (count == 0) "没有需要更新的槽位" else "已标注 $count 个槽位" }) {
+            PeerImport.apply(it, peer).also { r -> count = r.changed.size }.state
+        }
+    }
+    fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, System.currentTimeMillis())
+    fun saveToken(value: String) = edit {
+        val sameAccount = runCatching { vault.read() }.getOrNull() == value.trim()
+        vault.save(value.trim())
+        credentialPresent.value = true
+        it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = if (sameAccount) it.snapshot else null,
+            layout = if (sameAccount) it.layout else null, accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
+            globalBlock = if (sameAccount) it.globalBlock else null, status = "TOKEN_SAVED")
+    }
+    fun clearToken() = edit {
+        vault.clear(); credentialPresent.value = false
+        State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName)
+    }
+    fun previewManual(number: Int) {
+        if (busy.value || operation?.isActive == true) return
+        operation = scope.launch {
+            manualPreview.value = null
+            previewSlot = number
+            try { runCheck(true, observeOnly = true) } finally { previewSlot = null }
+        }
+    }
+    fun cancelManual() { manualPreview.value = null }
+    fun confirmManual() {
+        val permit = manualPreview.value ?: return
+        if (operation?.isActive == true) return
+        operation = scope.launch {
+            feedback.value = "已确认，即将更新"
+            delay((store.load().nextAllowed - System.currentTimeMillis()).coerceAtLeast(0))
+            if (manualPreview.value == permit) runCheck(true)
+            manualPreview.value = null
+        }
+    }
+    fun stop() { scope.cancel() }
+}

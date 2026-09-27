@@ -4,4 +4,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "FuckPo0JiXian"
-include(":core", ":app")
+include(":core", ":app", ":desktop")

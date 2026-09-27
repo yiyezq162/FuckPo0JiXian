@@ -64,7 +64,11 @@ class Controller(private val context: Context) {
         }
         if (store.load().demo) restoreDemo()
         // Other devices show this name next to the slots this phone manages.
-        if (store.load().deviceName.isBlank()) runCatching { store.save(store.load().copy(deviceName = Build.MODEL.trim().take(24))) }
+        if (store.load().deviceName.isBlank()) runCatching {
+            // The name people gave the phone (e.g. "Xiaomi 14"), not a model code like 23127PN0CC.
+            val name = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.trim()?.takeIf { it.isNotEmpty() } ?: Build.MODEL.trim()
+            store.save(store.load().copy(deviceName = name.take(24)))
+        }
         wifiObserver.start { changed() }
         refreshSchedule()
         // An app update finishes cancelling the old install's PendingIntents a few seconds after the new
