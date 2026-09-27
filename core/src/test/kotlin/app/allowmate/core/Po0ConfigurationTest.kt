@@ -66,12 +66,12 @@ class Po0ConfigurationTest {
         }
         val store = MemoryStore(state)
         val engine = Engine(store, { time })
-        val network = NetworkSession("n", "test", false, next) { true }
+        val network = NetworkSession("n", "cellular", false, next) { true }
         assertEquals("OBSERVED_MISSING", engine.check(p, network, manual = true, observeOnly = true))
         assertEquals(0, writes)
         assertEquals("RATE_LIMITED", engine.check(p, network))
         time = store.load().nextAllowed
-        assertEquals("MOBILE_SLOT_VERIFIED", engine.check(p, network))
+        assertEquals("SLOT_UPDATED", engine.check(p, network))
         assertEquals(1, writes); assertTrue(Entry(home, 0) in snapshot.entries)
     }
 }

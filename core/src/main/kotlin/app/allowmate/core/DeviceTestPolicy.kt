@@ -3,6 +3,8 @@ package app.allowmate.core
 /** Prevent an accidental connectedAndroidTest run from resetting a configured phone. */
 object DeviceTestPolicy {
     private val optIns = mapOf(
+        "inspectUpgradeAndProxyGuard" to "allowUpgradeRead",
+        "inspectWifiIdentityRead" to "allowWifiIdentityRead",
         "importPrivateCredential" to "allowCredentialImport",
         "readPlatformOnly" to "allowAccountRead",
         "readDomesticOnly" to "allowRealNetworkProbe",

@@ -109,7 +109,7 @@ public final class Main {
             if (!DIR.isDirectory() || new File(DIR, "disable").exists() || new File(DIR, "remove").exists()) return "DISABLED";
             PackageInfo p = identity();
             if ((p.applicationInfo.flags & ApplicationInfo.FLAG_STOPPED) != 0) return "STOPPED";
-            if (p.getLongVersionCode() != 4) return "VERSION";
+            if (p.getLongVersionCode() != 5) return "VERSION";
             if (!context.getSystemService(UserManager.class).isUserUnlocked()) return "LOCKED";
             File config = new File(p.applicationInfo.dataDir, "no_backup/runtime-v1.json");
             if (!config.isFile() || config.length() > 1024) return "STOPPED";

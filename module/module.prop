@@ -1,6 +1,6 @@
 id=allowmate_helper
 name=白名单随行 · AllowMate 辅助入口
-version=0.4.0-preview
-versionCode=4
+version=0.5.0-preview
+versionCode=5
 author=AllowMate
-description=Magisk/KernelSU 事件辅助只读验收候选。APK负责所有HTTP；无挂载/网络规则/凭据。真机链路、待机和功耗未验证。
+description=辅助后台唤起：网络变化时尝试唤起白名单随行进行检查，无需让应用一直常驻。不能保证永久保活或休眠时及时同步。（如果您不知道这个是什么，那么就不用理会）

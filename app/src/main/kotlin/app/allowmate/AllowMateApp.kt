@@ -36,11 +36,14 @@ class Controller(private val context: Context) {
     val feedback = MutableStateFlow("")
     val networkLabel = MutableStateFlow("网络信息不可用")
     val currentNetworkKey = MutableStateFlow<String?>(null)
+    val wifiObservation = MutableStateFlow<WifiObservation?>(null)
+    val manualPreview = MutableStateFlow<ManualPermit?>(null)
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     // Android net IDs may be reused after reboot. Never reuse a prior boot's success cache.
     private val bootEpoch = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT).toString() }
         .getOrElse { UUID.randomUUID().toString() }
     private fun networkKey(network: Network?) = network?.let { "$bootEpoch:${it.networkHandle}" }
+    private val wifiObserver = WifiIdentityObserver(context) { networkKey(it)!! }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val gate = Mutex()
     private var operation: Job? = null
@@ -48,7 +51,11 @@ class Controller(private val context: Context) {
     @Volatile private var requestJob: Job? = null
     private var networkId: String? = null
     private val stability = Debouncer(policy.debounceMs)
-    private var demo = DemoPlatform()
+    private var demo = SlotDemoPlatform()
+    private var demoScenario = 0
+    private var previewSlot: Int? = null
+    private fun trustedPath(n: Network?): Boolean = n != null && cm.getLinkProperties(n)?.httpProxy == null &&
+        cm.defaultProxy == null && cm.allNetworks.none { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
 
     fun start() {
         scope.launch {
@@ -56,15 +63,16 @@ class Controller(private val context: Context) {
                 .collect { runCatching { runtime.publish(store.load()) }.onFailure { runtime.status.value = "模块状态保存失败 · 已降级" } }
         }
         if (store.load().demo) restoreDemo()
+        wifiObserver.start { changed() }
         refreshSchedule()
         try { cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
-        }) } catch (_: Exception) { feedback.value = "网络监听不可用；可手动检查" }
+        }) } catch (_: Exception) { feedback.value = "无法监听网络变化，请手动检查" }
     }
     private fun restoreDemo() {
-        demo = DemoPlatform()
+        demo = SlotDemoPlatform()
         store.load().snapshot?.let { demo.current = it.current; demo.capacity = it.capacity; demo.entries = it.entries; demo.revision = it.revision?.toIntOrNull() ?: 0 }
     }
     private fun physical(): Network? = cm.activeNetwork?.takeIf { n ->
@@ -79,8 +87,11 @@ class Controller(private val context: Context) {
     private fun changed() { scope.launch {
         val n = physical(); networkLabel.value = kind(cm.activeNetwork)
         currentNetworkKey.value = networkKey(cm.activeNetwork)
-        val id = networkKey(n)
+        wifiObservation.value = if (store.load().demo) demoWifi() else wifiObserver.latest
+        val identity = wifiObserver.latest
+        val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}")
         if (!stability.changed(id, SystemClock.elapsedRealtime())) return@launch
+        manualPreview.value = null
         networkId = id
         operation?.cancel()
         requestJob?.cancel()
@@ -95,14 +106,14 @@ class Controller(private val context: Context) {
         if (!vault.exists() || physical() == null) return
         val planned = SyncPlanning.delayMs(store.load(), System.currentTimeMillis(), stability.remaining(SystemClock.elapsedRealtime())) ?: return
         val wait = maxOf(planned, minimumDelay)
-        feedback.value = if (wait > policy.debounceMs) "网络已变化，等待限频结束后自动检查" else "等待网络稳定后检查"
+        feedback.value = if (wait > policy.debounceMs) "网络已变化，稍后自动检查" else "网络已变化，稳定后自动检查"
         WorkManager.getInstance(context).enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<CheckWorker>().setInitialDelay(wait, TimeUnit.MILLISECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
     }
     private fun refreshSchedule() {
         val wm = WorkManager.getInstance(context)
-        if (store.load().paused || store.load().demo || store.load().authBlocked || !vault.exists()) {
+        if (store.load().paused || store.load().demo || store.load().authBlocked || store.load().globalBlock != null || !vault.exists()) {
             wm.cancelUniqueWork("fallback"); wm.cancelUniqueWork("network-check"); wm.cancelUniqueWork("catch-up")
         } else wm.enqueueUniquePeriodicWork("fallback", ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<CheckWorker>(policy.fallbackMinutes, TimeUnit.MINUTES)
@@ -131,17 +142,17 @@ class Controller(private val context: Context) {
             try {
                 val state = store.load()
                 val now = System.currentTimeMillis()
-                if (state.demo || state.paused) { feedback.value = "请在真实环境恢复检查后再探测国内出口"; return@launch }
-                if (now < state.nextProbeAllowed) { feedback.value = "国内出口检查仍在限频期"; return@launch }
+                if (state.demo || state.paused) { feedback.value = "请先恢复检查"; return@launch }
+                if (now < state.nextProbeAllowed) { feedback.value = "查询太频繁，请稍后再试"; return@launch }
                 val network = cm.activeNetwork
                 if (network == null || cm.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
-                    feedback.value = "没有可用网络，未发起出口探测"; return@launch
+                    feedback.value = "当前没有可用网络"; return@launch
                 }
-                feedback.value = if (updateDomestic(network)) "国内出口已观察" else "国内出口未验证，保留上次观察"
+                feedback.value = if (updateDomestic(network)) "已获取国内出口" else "查询失败，保留上次结果"
             } catch (_: CancellationException) {
-                feedback.value = "国内出口检查已取消"
+                feedback.value = "查询已取消"
             } catch (_: Exception) {
-                feedback.value = "国内出口状态无法保存，检查已停止"
+                feedback.value = "无法保存查询结果"
             } finally {
                 if (requestJob === thisRequest) requestJob = null
                 busy.value = false; gate.unlock()
@@ -199,10 +210,15 @@ class Controller(private val context: Context) {
                 return "RATE_LIMITED"
             }
             val n = physical()
-            if (!s.demo && n == null) { feedback.value = "没有可绑定的已验证底层网络；VPN 不等于直连"; return "NO_NETWORK" }
-            var session = if (s.demo) NetworkSession("demo", "模拟网络", true) { store.load().demo }
-                else NetworkSession(networkKey(n)!!, kind(n), false) {
-                    physical() == n && !store.load().demo && (!enhanced || RuntimePolicy.enabled(store.load()))
+            if (!s.demo && (n == null || !trustedPath(n))) { feedback.value = statusText("UNTRUSTED_PATH"); return "UNTRUSTED_PATH" }
+            val wifi = if (s.demo) demoWifi() else if (kind(n) == "Wi-Fi") wifiObserver.observe(n!!) else null
+            wifiObservation.value = wifi
+            val startKind = if (s.demo) if (demoScenario in setOf(0, 1, 3, 4, 5, 6)) "wifi" else "cellular" else kind(n)
+            val permit = manualPreview.value
+            var session = if (s.demo) NetworkSession("demo", startKind, true, demo.current, wifi, permit) { store.load().demo }
+                else NetworkSession(networkKey(n)!!, startKind, false, wifi = wifi, manualPermit = permit) {
+                    physical() == n && trustedPath(n) && !store.load().demo && (startKind != "Wi-Fi" || wifiObserver.stillMatches(wifi)) &&
+                        (!enhanced || RuntimePolicy.enabled(store.load()))
                 }
             if (!manual) {
                 // Events already wait in WorkManager. Only wait the remaining stable interval,
@@ -216,7 +232,7 @@ class Controller(private val context: Context) {
             val platform = if (s.demo) demo else Po0Platform(vault::read, NetworkTransport(n!!))
             // Slot writes require a recent observation on this exact Android network.
             // Never turn the domestic result into the API source IP; compare both in SlotSync.
-            if (!observeOnly && !s.demo && s.mode == Mode.AUTO && s.slotPlan != null && !s.paused && !s.authBlocked &&
+            if ((!observeOnly || previewSlot != null) && !s.demo && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null && !s.paused && !s.authBlocked &&
                 System.currentTimeMillis() >= s.nextAllowed && session.stillCurrent()) {
                 val d = store.load().domesticExit
                 val freshProbe = d != null && d.networkKey == session.key && System.currentTimeMillis() - d.time < policy.minIntervalMs
@@ -226,23 +242,48 @@ class Controller(private val context: Context) {
                     it.networkKey == session.key && System.currentTimeMillis() - it.time < policy.minIntervalMs &&
                         store.load().probeStatus == "PROBE_OBSERVED"
                 }?.cidr)
+                val candidate = session.observedCidr
+                session = session.copy(revalidate = {
+                    val latest = if (startKind == "Wi-Fi") wifiObserver.observe(n!!) else null
+                    val identityOk = startKind != "Wi-Fi" || (wifi == null && latest == null) || wifi?.sameIdentity(latest) == true
+                    val reply = NetworkTransport(n!!).execute("GET", ProbeSource.IP3322.url)
+                    val exit = DomesticProbe.parse(reply, System.currentTimeMillis(), networkKey(n)!!, ProbeSource.IP3322)
+                    identityOk && physical() == n && exit.cidr == candidate
+                })
             }
             val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
+            if (!observeOnly) manualPreview.value = null
             val after = store.load()
+            previewSlot?.let { number ->
+                val slot = after.layout?.slots?.find { it.number == number }
+                if (code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING") && !after.paused &&
+                    slot?.purpose == SlotPurpose.FIXED && slot.writer == Writer.LOCAL && slot.authorized &&
+                    session.observedCidr == after.snapshot?.current && session.stillCurrent()) {
+                    manualPreview.value = ManualPermit(after.accountContext, after.layout!!.version, number,
+                        session.key, session.wifi, after.snapshot!!, System.currentTimeMillis() + 180_000)
+                } else feedback.value = "无法预览：请确认已恢复检查、此槽已授权且出口未变"
+            }
             if (!s.demo && n != null && !after.paused && session.stillCurrent() && after.lastCheck > s.lastCheck &&
                 System.currentTimeMillis() >= after.nextProbeAllowed &&
                 (manual || after.domesticExit?.networkKey != session.key || System.currentTimeMillis() - (after.domesticExit?.time ?: 0) >= policy.cacheMs)) {
                 updateDomestic(n)
             }
             feedback.value = statusText(code)
-            if (observeOnly && after.mode == Mode.AUTO && after.slotPlan != null && !after.paused && code == "OBSERVED_MISSING")
+            if (observeOnly && after.mode == Mode.AUTO && after.layout != null && !after.paused && code == "OBSERVED_MISSING" && previewSlot == null)
                 scheduleCheck("catch-up")
             if (!manual && SyncPlanning.needsFollowUp(code, store.load())) scheduleCheck("catch-up")
-            if (store.load().authBlocked || store.load().paused) refreshSchedule()
-            if (code in listOf("HTTP_401", "HTTP_403", "CAPACITY_FULL", "FIXED_DRIFT", "VERIFY_FAILED", "HOME_GUARD_FAILED", "SLOT_CONFLICT", "SLOT_VERIFY_FAILED")) notifyIssue(code)
+            if (store.load().authBlocked || store.load().paused || store.load().globalBlock != null) refreshSchedule()
+            if (code in listOf("HTTP_401", "HTTP_403", "CAPACITY_FULL", "SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "COVERED_OTHER_SLOT", "IDENTITY_AMBIGUOUS", "PENDING_REVIEW")) {
+                val latest = store.load()
+                val marker = "NOTIFIED:$code:${latest.layout?.version}"
+                if (latest.layout != null && marker !in latest.layout!!.notices) {
+                    store.save(latest.copy(layout = latest.layout!!.copy(notices = (latest.layout!!.notices + marker).toList().takeLast(100).toSet())))
+                    notifyIssue(code)
+                }
+            }
             return code
         } catch (_: CancellationException) { return "CANCELLED_NETWORK_OR_SETTINGS" }
-        catch (_: Exception) { feedback.value = "本地存储或凭据不可用；已停止本次检查"; return "LOCAL_ERROR" }
+        catch (_: Exception) { feedback.value = "无法读取本地数据，已停止检查"; return "LOCAL_ERROR" }
         finally {
             if (requestJob === thisRequest) requestJob = null
             busy.value = false; gate.unlock()
@@ -251,12 +292,13 @@ class Controller(private val context: Context) {
     }
     private fun edit(scheduleNow: Boolean = false, block: (State) -> State) {
         scope.launch {
+            manualPreview.value = null
             operation?.cancelAndJoin()
             requestJob?.cancelAndJoin()
             gate.withLock {
-                try { withContext(Dispatchers.IO) { store.save(block(store.load())) }; feedback.value = "已保存到本机" }
-                catch (e: IllegalArgumentException) { feedback.value = "无法保存：请检查预算、保护状态或关联条目" }
-                catch (_: Exception) { feedback.value = "保存失败；请检查本机存储" }
+                try { withContext(Dispatchers.IO) { store.save(block(store.load())) }; feedback.value = "已保存" }
+                catch (e: IllegalArgumentException) { feedback.value = statusText(e.message ?: "CONFIG_INVALID") }
+                catch (_: Exception) { feedback.value = "保存失败" }
             }
             refreshSchedule()
             if (scheduleNow) scheduleCheck("network-check")
@@ -266,57 +308,102 @@ class Controller(private val context: Context) {
     fun runtimeMode(value: RuntimeMode) = edit { it.copy(runtimeMode = value) }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
     fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
-    fun configurePo0(plan: SlotPlan) = edit {
-        val checked = SlotConfiguration.prepare(it, plan.home, plan.homeSlot, plan.mobileSlot)
-        it.copy(slotPlan = checked, paused = true, lastSuccess = 0, status = "SLOT_CONFIGURED")
+    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit {
+        LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
+    }
+    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = edit {
+        val actual = if (it.demo) demoWifi() else wifiObserver.latest
+        require(expected.sameIdentity(actual) && (it.demo || wifiObserver.stillMatches(expected))) { "WIFI_UNAVAILABLE" }
+        LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp)
+    }
+    fun revokeWifi(slot: Int) = edit { LayoutRules.revoke(it, slot) }
+    fun foreground() {
+        wifiObserver.start { changed() }
+        manualPreview.value = null
+        changed()
+        if (!store.load().paused) scheduleCheck("catch-up")
+    }
+    fun refreshWifi() { scope.launch {
+        val n = physical()
+        wifiObservation.value = if (store.load().demo) demoWifi() else n?.let { wifiObserver.observe(it) }
+    } }
+    fun previewManual(number: Int) {
+        if (busy.value) return
+        operation = scope.launch {
+            manualPreview.value = null
+            previewSlot = number
+            try { runCheck(true, observeOnly = true) } finally { previewSlot = null }
+        }
+    }
+    fun cancelManual() { manualPreview.value = null; operation?.cancel() }
+    fun confirmManual() {
+        val permit = manualPreview.value ?: return
+        if (operation?.isActive == true) return
+        operation = scope.launch {
+            // Global limiter applies to preview and confirmation; permission expires rather than replaying offline.
+            val wait = (store.load().nextAllowed - System.currentTimeMillis()).coerceAtLeast(0)
+            feedback.value = "已确认，即将更新"
+            busy.value = true
+            try { delay(wait); if (manualPreview.value == permit) runCheck(true) }
+            finally { busy.value = false; manualPreview.value = null }
+        }
     }
     fun demo(enabled: Boolean) = edit {
         // Keep real and simulated credentials separate; discard network/account associations on switching.
-        demo = DemoPlatform()
-        State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
+        demo = SlotDemoPlatform()
+        val base = State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
             nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed)
+        if (enabled) demoState(base) else base
     }
     fun saveToken(value: String) = edit {
         val sameAccount = vault.read() == value.trim()
+        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed))
         vault.save(value.trim())
         credentialPresent.value = true
         it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = null, ownership = emptyList(), profiles = emptyList(), activeProfileId = null,
-            slotPlan = if (sameAccount) it.slotPlan else null, budget = Budget(), status = "TOKEN_SAVED")
+            slotPlan = if (sameAccount) it.slotPlan else null, layout = if (sameAccount) it.layout else null,
+            accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
+            globalBlock = if (sameAccount) it.globalBlock else null, budget = Budget(), status = "TOKEN_SAVED")
     }
-    fun clearToken() = edit { vault.clear(); credentialPresent.value = false; it.copy(paused = true, snapshot = null, ownership = emptyList(), profiles = emptyList(), activeProfileId = null, slotPlan = null, budget = Budget(), status = "NO_TOKEN") }
-    fun budget(fixed: Int, mobile: Int) = edit {
-        val b = Budget(fixed, mobile)
-        require(it.snapshot?.let { snap -> Allocation.budgetFits(it, snap, b) } ?: (fixed == 0 && mobile == 0))
-        it.copy(budget = b)
-    }
-    fun addProfile(name: String, kind: Kind) = edit {
-        require(name.isNotBlank() && name.length <= 40)
-        require(it.profiles.count { p -> p.kind == kind } < if (kind == Kind.FIXED) it.budget.fixed else it.budget.mobile)
-        it.copy(profiles = it.profiles + Profile(UUID.randomUUID().toString(), name.trim(), kind))
-    }
-    fun removeProfile(id: String) = edit { it.copy(profiles = it.profiles.filterNot { p -> p.id == id }, activeProfileId = it.activeProfileId.takeUnless { active -> active == id }) }
-    fun selectProfile(id: String?) = edit {
-        require(id == null || it.profiles.any { p -> p.id == id })
-        it.copy(activeProfileId = id, lastSuccess = 0)
-    }
-    fun associate(id: String, confirmed: Boolean) = edit {
-        Allocation.associate(it, id, requireNotNull(it.snapshot).current, it.networkKey, confirmed)
-    }
-    fun claim(cidr: Cidr) = edit { Allocation.claim(it, cidr, true) }
-    fun protection(cidr: Cidr, protect: Boolean) = edit {
-        require(it.ownership.any { o -> o.cidr == cidr && o.authorized })
-        require(protect || it.profiles.none { p -> p.kind == Kind.FIXED && p.cidr == cidr })
-        it.copy(ownership = it.ownership.map { o -> if (o.cidr == cidr) o.copy(protected = protect) else o })
-    }
+    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN"); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
     fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
-    fun nextDemoNetwork() = edit { demo.current = Cidr(if (demo.current.value == "203.0.113.0/24") "192.0.2.0/24" else "203.0.113.0/24"); it.copy(lastSuccess = 0) }
+    private fun demoWifi(): WifiObservation? = when (demoScenario) {
+        0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())
+        3 -> WifiObservation("demo", "Example Office", "02:11:22:33:44:02", WifiSecurity.WPA3, System.currentTimeMillis())
+        4 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:99", WifiSecurity.WPA2, System.currentTimeMillis())
+        5 -> WifiObservation("demo", null, null, WifiSecurity.UNKNOWN, System.currentTimeMillis(), false)
+        6 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())
+        else -> null
+    }
+    private fun demoState(base: State): State {
+        demoScenario = 0
+        demo.entries = listOf(Entry(Cidr("192.0.2.0/24"), 0), Entry(Cidr("198.51.100.0/24"), 1),
+            Entry(Cidr("203.0.112.0/24"), 2), Entry(Cidr("203.0.114.0/24"), 3), Entry(Cidr("198.51.99.0/24")))
+        val layout = SlotLayout(slots = listOf(
+            ManagedSlot(0, "示例住宅", SlotPurpose.FIXED, Writer.LOCAL, "demo-home", true, authorized = true, baseline = demo.entries[0].cidr),
+            ManagedSlot(1, "示例办公室", SlotPurpose.FIXED, Writer.LOCAL, "demo-office", true, authorized = true, baseline = demo.entries[1].cidr),
+            ManagedSlot(2, "这台手机", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, authorized = true, baseline = demo.entries[2].cidr),
+            ManagedSlot(3, "另一台手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE), ManagedSlot(4, "保留用途")
+        ), identities = listOf(
+            NetworkIdentity("demo-home", "示例住宅", "Example Home", setOf(AuthorizedAp("02:11:22:33:44:01", WifiSecurity.WPA2))),
+            NetworkIdentity("demo-office", "示例办公室", "Example Office", setOf(AuthorizedAp("02:11:22:33:44:02", WifiSecurity.WPA3)))))
+        wifiObservation.value = demoWifi()
+        return base.copy(layout = layout, snapshot = Snapshot(demo.current, demo.entries, 5, demo.revision.toString()), lastCheck = System.currentTimeMillis())
+    }
+    fun nextDemoNetwork() = edit {
+        demoScenario = (demoScenario + 1) % 7
+        demo.current = Cidr(listOf("203.0.113.0/24", "192.0.3.0/24", "198.51.101.0/24", "203.0.115.0/24", "192.0.4.0/24", "192.0.5.0/24", "203.0.116.0/24")[demoScenario])
+        if (demoScenario == 6) demo.entries = demo.entries.map { e -> if (e.slot == 0) Entry(Cidr("198.51.98.0/24"), 0) else e }
+        wifiObservation.value = demoWifi()
+        it.copy(lastSuccess = 0, status = "DEMO_SCENARIO_$demoScenario")
+    }
     private fun notifyIssue(code: String) {
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("attention", "需要处理", NotificationManager.IMPORTANCE_DEFAULT))
         val intent = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        manager.notify(1, NotificationCompat.Builder(context, "attention").setSmallIcon(R.drawable.ic_allowmate)
-            .setContentTitle("白名单随行需要处理").setContentText(statusText(code)).setContentIntent(intent).setAutoCancel(true).build())
+        manager.notify(1, NotificationCompat.Builder(context, "attention").setSmallIcon(R.drawable.ic_stat_allowmate)
+            .setContentTitle("白名单需要处理").setContentText(statusText(code)).setContentIntent(intent).setAutoCancel(true).build())
     }
 }
 class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {

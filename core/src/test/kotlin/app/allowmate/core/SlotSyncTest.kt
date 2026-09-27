@@ -101,11 +101,12 @@ class SlotSyncTest {
         assertEquals("MOBILE_SLOT_VERIFIED", sync(f, saved).code)
         assertTrue(Entry(home, 0) in f.snap.entries)
     }
-    @Test fun enginePausesOnHomeGuardFailure() = runTest {
+    @Test fun engineIsolatesLegacyFixedRecordWithoutGlobalHomeGuard() = runTest {
         val f = fake(entries = listOf(Entry(other)))
         val store = MemoryStore(State(mode = Mode.AUTO, paused = false, slotPlan = plan))
-        assertEquals("HOME_GUARD_FAILED", Engine(store, { 1_000 }).check(f, NetworkSession("n", "mobile", false, mobile) { true }))
-        assertTrue(store.load().paused); assertEquals(0, f.writes)
+        assertEquals("NO_TARGET", Engine(store, { 1_000 }).check(f, NetworkSession("n", "unknown", false, mobile) { true }))
+        assertFalse(store.load().paused); assertEquals(0, f.writes)
+        assertEquals("IDENTITY_REQUIRED", store.load().layout!!.slots.first().status)
     }
     @Test fun observeNeverWritesEvenWithConfiguredSlots() = runTest {
         val f = fake()

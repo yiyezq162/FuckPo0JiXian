@@ -2,7 +2,7 @@ package app.allowmate.core
 
 data class SlotResult(val snapshot: Snapshot, val plan: SlotPlan, val code: String)
 
-/** Only dedicated, explicitly authorized slots. No slotless POST, delete or home rotation. */
+/** Historical v1 protocol fixture ONLY. Engine's SlotPlatform branch uses LayoutSync, never this object. */
 object SlotSync {
     suspend fun update(before: Snapshot, plan: SlotPlan, platform: SlotPlatform,
                        observed: Cidr?, live: () -> Boolean,

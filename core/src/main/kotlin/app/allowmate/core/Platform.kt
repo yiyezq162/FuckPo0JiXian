@@ -56,13 +56,20 @@ class Po0Platform(private val token: () -> String?, private val transport: Trans
 }
 
 /** Test/demo only: server-side revision check and capacity refusal, not Po0 behavior. */
-class DemoPlatform : Platform {
+open class DemoPlatform : Platform {
     override val capabilities = Capabilities(atomicAddWithoutEviction = true)
     var current = Cidr("203.0.113.0/24")
     var capacity = 5
     var entries = listOf(Entry(Cidr("198.51.100.0/24")))
     var revision = 0
     override suspend fun query() = Snapshot(current, entries, capacity, revision.toString())
+    suspend fun replaceDemoSlot(slot: Int): Snapshot {
+        if (entries.any { it.cidr == current && it.slot != slot }) throw ApiFailure("COVERED_OTHER_SLOT")
+        if (entries.none { it.slot == slot } && entries.size >= capacity) throw ApiFailure("CAPACITY_FULL")
+        entries = entries.filterNot { it.slot == slot } + Entry(current, slot)
+        revision++
+        return query()
+    }
     override suspend fun addIfUnchanged(expected: Snapshot): Snapshot {
         if (expected.revision != revision.toString() || expected.current != current) throw ApiFailure("CONCURRENT_CHANGE", 409)
         if (entries.none { it.cidr == current }) {
@@ -71,4 +78,9 @@ class DemoPlatform : Platform {
         }
         return query()
     }
+}
+
+/** Current product demo; the base class remains a historical generic protocol fixture. */
+class SlotDemoPlatform : DemoPlatform(), SlotPlatform {
+    override suspend fun writeSlot(slot: Int) = replaceDemoSlot(slot)
 }

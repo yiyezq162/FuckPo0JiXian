@@ -8,12 +8,14 @@ object StateCodec {
     private fun JsonObject.l(k: String) = getValue(k).jsonPrimitive.long
     private fun JsonObject.b(k: String) = getValue(k).jsonPrimitive.boolean
     private fun JsonObject.optional(k: String) = get(k)?.takeUnless { it is JsonNull }?.jsonPrimitive?.content
-    private fun snapshot(v: Snapshot) = buildJsonObject {
+    internal fun snapshot(v: Snapshot) = buildJsonObject {
         put("current", v.current.value); put("capacity", v.capacity); put("revision", v.revision)
         putJsonArray("entries") { v.entries.forEach { e -> add(buildJsonObject { put("cidr", e.cidr.value); put("slot", e.slot) }) } }
     }
     fun encode(s: State): String = buildJsonObject {
-        put("version", 1); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
+        put("version", 2); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
+        put("accountContext", s.accountContext); put("globalBlock", s.globalBlock)
+        put("layout", s.layout?.let(LayoutCodec::encode) ?: JsonNull)
         put("runtimeMode", s.runtimeMode.name)
         put("fixed", s.budget.fixed); put("mobile", s.budget.mobile)
         put("lastCheck", s.lastCheck); put("lastSuccess", s.lastSuccess); put("nextAllowed", s.nextAllowed)
@@ -42,13 +44,13 @@ object StateCodec {
     fun decode(text: String): State {
         require(text.length <= 1_048_576)
         val o = Json.parseToJsonElement(text).jsonObject
-        require(o.l("version") == 1L)
+        require(o.l("version") in 1L..2L)
         val snap = o["snapshot"]?.takeUnless { it is JsonNull }?.jsonObject?.let { v ->
             Snapshot(Cidr(v.s("current")), v.getValue("entries").jsonArray.map {
                 val e = it.jsonObject; Entry(Cidr(e.s("cidr")), e.optional("slot")?.toInt())
             }, v.l("capacity").toInt(), v.optional("revision"))
         }
-        return State(Mode.valueOf(o.s("mode")), o.b("paused"), o.b("demo"), Budget(o.l("fixed").toInt(), o.l("mobile").toInt()),
+        val state = State(Mode.valueOf(o.s("mode")), o.b("paused"), o.b("demo"), Budget(o.l("fixed").toInt(), o.l("mobile").toInt()),
             o.getValue("profiles").jsonArray.map { it.jsonObject.let { p -> Profile(p.s("id"), p.s("name"), Kind.valueOf(p.s("kind")), p.optional("cidr")?.let(::Cidr), p.optional("hint")) } },
             o.getValue("ownership").jsonArray.map { it.jsonObject.let { v -> Ownership(Cidr(v.s("cidr")), v.b("authorized"), v.b("protected"), v.l("used")) } },
             snap, o.l("lastCheck"), o.l("lastSuccess"), o.l("nextAllowed"), o.l("failures").toInt(), o.b("authBlocked"), o.optional("networkKey"), o.s("status"),
@@ -59,6 +61,9 @@ object StateCodec {
             o["slotPlan"]?.takeUnless { it is JsonNull }?.jsonObject?.let { p ->
                 SlotPlan(Cidr(p.s("home")), p.l("homeSlot").toInt(), p.l("mobileSlot").toInt(), p.b("homeReady"),
                     p.optional("lastMobile")?.let(::Cidr), p.optional("pendingMobile")?.let(::Cidr))
-            }, o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD)
+            }, o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD,
+            o["layout"]?.takeUnless { it is JsonNull }?.jsonObject?.let(LayoutCodec::decode),
+            o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"))
+        return if (o.l("version") == 1L) LayoutRules.migrate(state) else state
     }
 }

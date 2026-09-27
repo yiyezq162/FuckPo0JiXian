@@ -3,7 +3,7 @@ package app.allowmate.core
 /** Trigger selection never changes account authorization or persistent rate limits. */
 object RuntimePolicy {
     const val PROTOCOL = 1
-    fun enabled(s: State) = s.runtimeMode == RuntimeMode.MODULE && !s.paused && !s.demo && !s.authBlocked
+    fun enabled(s: State) = s.runtimeMode == RuntimeMode.MODULE && !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null
     fun status(mode: RuntimeMode, paused: Boolean, reply: String?): String = when {
         mode == RuntimeMode.STANDARD -> "标准模式 · Android 调度"
         paused -> "已暂停 · 增强触发关闭"

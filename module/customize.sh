@@ -1,7 +1,8 @@
 #!/system/bin/sh
 # Executed by KernelSU module installer, not a standalone root installer.
 [ "$KSU" = "true" ] || [ -n "$MAGISK_VER_CODE" ] || abort "需要 Magisk 或 KernelSU 模块安装器。"
-ui_print "AllowMate 0.4.0-preview · 只读链路验收候选"
+ui_print "AllowMate 0.5.0-preview · 多槽位本地验收候选"
+ui_print "（如果您不知道这个是什么，那么就不用理会）"
 ui_print "无系统挂载，不需要本模块专用 metamodule。"
 ui_print "事件 helper，不保存 token、不访问 Po0；真机兼容与待机尚未验收。"
 ui_print "KernelSU 用户空间版本: ${KSU_VER_CODE:-UNKNOWN}"

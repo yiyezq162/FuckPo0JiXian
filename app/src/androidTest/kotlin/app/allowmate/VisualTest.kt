@@ -33,32 +33,39 @@ class VisualTest {
             c.vault.save("pgnfw_VISUAL_TEST_ONLY")
             c.credentialPresent.value = true
             // Synthetic dedicated-slot configuration; no credential, paused, no requests.
-            c.store.save(State(paused = true, mode = Mode.AUTO, snapshot = Snapshot(Cidr("203.0.113.0/24"),
-                listOf(Entry(Cidr("198.51.100.0/24"), 0), Entry(Cidr("203.0.113.0/24"), 1)), 5),
-                slotPlan = SlotPlan(Cidr("198.51.100.0/24"), 0, 1, true, Cidr("203.0.113.0/24")),
-                networkKey = c.currentNetworkKey.value, status = "PRESENT_CURRENT_CHECK", lastCheck = 1_790_440_000_000, lastSuccess = 1_790_440_000_000))
+            c.store.save(State(demo = true, paused = true, mode = Mode.AUTO, snapshot = Snapshot(Cidr("203.0.113.0/24"),
+                listOf(Entry(Cidr("198.51.100.0/24"), 0), Entry(Cidr("203.0.113.0/24"), 1), Entry(Cidr("192.0.2.0/24"))), 5),
+                layout = SlotLayout(slots = listOf(ManagedSlot(0, "家庭示例", SlotPurpose.FIXED, Writer.LOCAL, status = "IDENTITY_REQUIRED"),
+                    ManagedSlot(1, "公司示例", SlotPurpose.FIXED, Writer.LOCAL),
+                    ManagedSlot(2, "本机移动", SlotPurpose.MOBILE, Writer.LOCAL),
+                    ManagedSlot(3, "另一台手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE), ManagedSlot(4, "保留用途"))),
+                networkKey = "demo", status = "PRESENT_CURRENT_CHECK", lastCheck = System.currentTimeMillis()))
         }
         try {
-            listOf("首页", "白名单", "Po0", "诊断").forEachIndexed { index, page ->
-                rule.onNodeWithText(page).performClick()
+            (0..3).forEach { index ->
+                rule.onNodeWithTag("tab-$index").performClick()
                 capture("page-$index.png")
             }
-            rule.onNodeWithText("Po0").performClick()
-            rule.onNodeWithTag("page-list").performScrollToNode(hasText("模块增强（Magisk／KernelSU）"))
-            rule.onNodeWithText("模块增强（Magisk／KernelSU）").performClick()
+            rule.onNodeWithTag("tab-2").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("模块增强"))
+            rule.onNodeWithText("模块增强").performClick()
             rule.waitUntil { c.store.load().runtimeMode == RuntimeMode.MODULE }
             capture("runtime-mode.png")
-            rule.onNodeWithTag("page-list").performScrollToNode(hasText("模块诊断与安装说明"))
-            rule.onNodeWithText("模块诊断与安装说明").performClick()
-            rule.onNodeWithText("最近连接报告（历史）").performScrollTo()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("诊断与安装说明"))
+            rule.onNodeWithText("诊断与安装说明").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("最近连接"))
             capture("runtime-evidence.png")
-            rule.onNodeWithText("最近执行结果（历史）").performScrollTo()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("最近结果"))
             capture("runtime-result-history.png")
-            rule.onNodeWithText("模块诊断与安装说明").performScrollTo().performClick()
-            rule.onNodeWithTag("page-list").performScrollToNode(hasText("修改槽位配置"))
-            rule.onNodeWithText("修改槽位配置").performClick()
+            rule.onNodeWithText("诊断与安装说明").performClick()
+            rule.onNodeWithTag("tab-1").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasTestTag("slot-1"))
+            rule.onNodeWithTag("slot-1").performClick()
             capture("slot-dialog.png")
+            rule.onNodeWithText("保存只修改本机配置，开启自动同步后才会写入 Po0。").performScrollTo()
+            capture("slot-authorization.png")
             rule.onNodeWithText("取消").performClick()
+            rule.onNodeWithTag("tab-2").performClick()
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("更换 Token"))
             rule.onNodeWithText("更换 Token").performClick()
             capture("token-dialog.png")

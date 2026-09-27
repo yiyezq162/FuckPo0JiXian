@@ -1,6 +1,6 @@
 package app.allowmate.core
 
-/** Local configuration only. Revalidate the snapshot during the eventual server operation. */
+/** Historical v1 fixture only. Product slot editing uses LayoutRules.saveSlot. */
 object SlotConfiguration {
     fun prepare(s: State, home: Cidr, homeSlot: Int, mobileSlot: Int): SlotPlan {
         fun reject(code: String): Nothing = throw IllegalArgumentException(code)

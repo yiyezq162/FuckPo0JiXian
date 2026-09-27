@@ -15,6 +15,56 @@ import java.io.File
 /** Opt-in account tests. Never run these as part of the ordinary emulator/UI suite. */
 @RunWith(AndroidJUnit4::class)
 class AuthorizedAccountTest {
+    @Test fun inspectWifiIdentityRead() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("allowWifiIdentityRead") == "true")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val c = (context.applicationContext as AllowMateApp).controller
+        check(c.store.load().paused && !c.store.load().demo)
+        val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val network = checkNotNull(manager.activeNetwork)
+        check(manager.getNetworkCapabilities(network)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true)
+        val requests = NetworkTransport.requests.get()
+        val observer = WifiIdentityObserver(context) { "device-test:${it.networkHandle}" }
+        // No ActivityScenario: OEM lifecycle test harnesses can stall before reaching the observer.
+        val foregroundWait = InstrumentationRegistry.getArguments().getString("waitForForegroundMs")?.toLongOrNull()?.coerceIn(0, 15_000) ?: 0
+        val observation = runBlocking { delay(foregroundWait); withTimeout(8_000) { observer.observe(network) } }
+        val usable = observation?.usable(System.currentTimeMillis(), "device-test:${network.networkHandle}") == true
+        val expected = InstrumentationRegistry.getArguments().getString("expectUsable") == "true"
+        assertEquals("WifiInfo available=${observation?.available}; security=${observation?.security}; permission=${observer.permitted()}; identity withheld", expected, usable)
+        assertEquals(requests, NetworkTransport.requests.get())
+        println("Actual WifiInfo on request Network: usable=$usable; expected=$expected; HTTP attempts=0; SSID/BSSID withheld; no binding persisted")
+    }
+    /** Explicitly selected physical-device check: no reset, credential access or whitelist POST. */
+    @Test fun inspectUpgradeAndProxyGuard() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("allowUpgradeRead") == "true")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val c = (context.applicationContext as AllowMateApp).controller
+        val before = c.store.load()
+        assertNull("State migration must be readable", before.globalBlock)
+        if (before.slotPlan != null) {
+            assertNotNull(before.layout)
+            assertEquals(before.slotPlan!!.homeSlot, before.layout!!.slots.first { it.purpose == app.allowmate.core.SlotPurpose.FIXED }.number)
+            assertTrue(before.layout!!.identities.isEmpty())
+        }
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val visibleVpn = connectivity.allNetworks.any { connectivity.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }
+        val requests = NetworkTransport.requests.get()
+        // Do not turn absence of an app-visible VPN into evidence of direct routing.
+        if (visibleVpn) {
+            val code = runBlocking { withTimeout(10_000) { c.runCheck(true, observeOnly = true) } }
+            assertEquals("UNTRUSTED_PATH", code)
+        }
+        assertEquals(requests, NetworkTransport.requests.get())
+        assertEquals(before, c.store.load())
+        // Leave the authorized test phone safely paused; no remote operations or network settings changed.
+        instrumentation.runOnMainSync { c.pause(true) }
+        runBlocking { withTimeout(5_000) { c.store.flow.first { it.paused } } }
+        println("Upgrade readable; prior configured slots preserved if present; VPN guard=" +
+            (if (visibleVpn) "UNTRUSTED_PATH" else "UNVERIFIED_NO_APP_VISIBLE_VPN") +
+            "; HTTP attempts=0; paused=true; credentials and network identities withheld")
+    }
     @Test fun syncDedicatedSlots() {
         val args = InstrumentationRegistry.getArguments()
         Assume.assumeTrue(args.getString("allowDedicatedSlotWrite") == "true")
@@ -23,17 +73,18 @@ class AuthorizedAccountTest {
         val before = c.store.load()
         check(c.vault.exists() && !before.demo && !before.authBlocked && before.paused)
         check(System.currentTimeMillis() >= maxOf(before.nextAllowed, before.nextProbeAllowed)) { "Persistent quota preserved" }
-        val plan = before.slotPlan ?: app.allowmate.core.SlotPlan(
-            app.allowmate.core.Cidr(checkNotNull(args.getString("homeCidr"))),
-            checkNotNull(args.getString("homeSlot")).toInt(), checkNotNull(args.getString("mobileSlot")).toInt())
-        instrumentation.runOnMainSync { c.store.save(before.copy(slotPlan = plan, mode = Mode.AUTO, paused = false)) }
+        val slot = checkNotNull(args.getString("targetSlot")).toInt()
+        val managed = checkNotNull(before.layout).slots.first { it.number == slot }
+        check(managed.writer == app.allowmate.core.Writer.LOCAL && managed.authorized && managed.automatic)
+        instrumentation.runOnMainSync { c.store.save(before.copy(mode = Mode.AUTO, paused = false)) }
         try {
             val code = runBlocking { withTimeout(80_000) { c.runCheck(true) } }
             assertEquals(args.getString("expectedStatus"), code)
             val result = c.store.load()
-            check(result.slotPlan!!.homeReady)
-            check(result.snapshot!!.entries.any { it.cidr == plan.home && it.slot == plan.homeSlot })
-            println("Dedicated slot sync verified; code=$code; homeProtected=true; capacity=${result.snapshot!!.capacity}; entries=${result.snapshot!!.entries.size}; token withheld")
+            check(result.layout!!.pending == null)
+            check(result.layout!!.slots.first { it.number == slot }.baseline == result.snapshot!!.current)
+            check(result.snapshot!!.entries.any { it.cidr == result.snapshot!!.current && it.slot == slot })
+            println("Explicit target slot verified; code=$code; token and network identities withheld")
         } finally {
             instrumentation.runOnMainSync { c.pause(true) }
             runBlocking { withTimeout(5_000) { c.store.flow.first { it.paused } } }
@@ -44,11 +95,11 @@ class AuthorizedAccountTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val c = (instrumentation.targetContext.applicationContext as AllowMateApp).controller
         val s = c.store.load()
-        check(c.vault.exists() && !s.demo && !s.authBlocked && s.slotPlan?.homeReady == true && s.mode == Mode.AUTO)
-        check(s.snapshot!!.entries.any { it.cidr == s.slotPlan!!.home && it.slot == s.slotPlan!!.homeSlot })
+        check(c.vault.exists() && !s.demo && !s.authBlocked && s.globalBlock == null && s.mode == Mode.AUTO)
+        check(s.layout?.slots?.any { it.authorized && it.automatic && it.writer == app.allowmate.core.Writer.LOCAL } == true)
         instrumentation.runOnMainSync { c.pause(false) }
         runBlocking { withTimeout(5_000) { c.store.flow.first { !it.paused } } }
-        println("Dedicated-slot automatic network sync enabled; home guard active")
+        println("Authorized stable-slot synchronization enabled; APK safety gates remain active")
     }
     @Test fun scheduleAfterPersistentQuota() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("allowSchedulingRead") == "true")

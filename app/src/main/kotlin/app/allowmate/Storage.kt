@@ -16,22 +16,33 @@ import javax.crypto.spec.GCMParameterSpec
 
 class LocalStore(context: Context) : StateStore {
     private val file = AtomicFile(File(context.noBackupFilesDir, "state-v1.json"))
+    private val legacy = AtomicFile(File(context.noBackupFilesDir, "state-v1.recovery.json"))
+    private var recoveryRequired = false
     val flow = MutableStateFlow(read())
     private fun read(): State = try {
-        if (!file.baseFile.exists()) State() else {
-            val decoded = StateCodec.decode(file.openRead().bufferedReader().use { it.readText() })
+        if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) State() else {
+            val raw = file.openRead().bufferedReader().use { it.readText() }
+            val decoded = StateCodec.decode(raw)
             val cutoff = System.currentTimeMillis() - Policy().retentionMs
             val pruned = decoded.copy(observations = decoded.observations.filter { it.time >= cutoff }.takeLast(500),
                 events = decoded.events.filter { it.time >= cutoff }.takeLast(200),
                 domesticExit = decoded.domesticExit?.takeIf { it.time >= cutoff })
-            if (pruned != decoded) persist(pruned)
+            if (raw != StateCodec.encode(pruned)) {
+                if (!legacy.baseFile.exists()) {
+                    val out = legacy.startWrite()
+                    try { out.write(raw.toByteArray()); legacy.finishWrite(out) }
+                    catch (e: Exception) { legacy.failWrite(out); throw e }
+                }
+                persist(pruned)
+            }
             pruned
         }
-    } catch (_: Exception) { State(status = "STORAGE_RECOVERY_REQUIRED") }
+    } catch (_: Exception) { recoveryRequired = true; State(status = "STORAGE_RECOVERY_REQUIRED", globalBlock = "STORAGE_RECOVERY_REQUIRED") }
     // StateFlow publishes an immutable snapshot after the atomic write finishes.
     // Readers must not wait on fsync while an IO worker owns save's monitor.
     override fun load() = flow.value
     @Synchronized override fun save(state: State) {
+        check(!recoveryRequired) { "STORAGE_RECOVERY_REQUIRED" }
         persist(state)
         flow.value = state
     }

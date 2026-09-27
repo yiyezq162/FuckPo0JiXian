@@ -9,7 +9,9 @@ class MemoryStore(var state: State = State()) : StateStore {
     override fun save(state: State) { this.state = state }
 }
 data class NetworkSession(val key: String, val kind: String, val verifiedEgress: Boolean,
-                          val observedCidr: Cidr? = null, val stillCurrent: () -> Boolean)
+                          val observedCidr: Cidr? = null, val wifi: WifiObservation? = null,
+                          val manualPermit: ManualPermit? = null, val revalidate: suspend () -> Boolean = { true },
+                          val stillCurrent: () -> Boolean)
 
 class Engine(private val store: StateStore, private val now: () -> Long = System::currentTimeMillis,
              val policy: Policy = Policy()) {
@@ -25,6 +27,9 @@ class Engine(private val store: StateStore, private val now: () -> Long = System
     suspend fun check(platform: Platform, network: NetworkSession, manual: Boolean = false, observeOnly: Boolean = false): String {
         if (!mutex.tryLock()) return "BUSY"
         try {
+            // Real Po0 and the demo use exactly the same slot authorization path.
+            // Generic Profile/Budget support below is retained only for historical non-slot fixtures.
+            if (platform is SlotPlatform) return LayoutSync(store, now, policy).check(platform, network, observeOnly)
             var s = store.load()
             val t = now()
             if (s.paused && !observeOnly) return "PAUSED"
@@ -44,12 +49,6 @@ class Engine(private val store: StateStore, private val now: () -> Long = System
                     val refreshed = s.ownership.map { if (it.cidr == before.current) it.copy(lastUsed = t) else it }
                     save(s.copy(lastSuccess = t, failures = 0, ownership = refreshed), code)
                     return code
-                }
-                if (!observeOnly && s.mode == Mode.AUTO && s.slotPlan != null && platform is SlotPlatform) {
-                    val result = SlotSync.update(before, s.slotPlan!!, platform, network.observedCidr,
-                        network.stillCurrent) { p -> s = s.copy(slotPlan = p); store.save(s) }
-                    s = s.copy(snapshot = result.snapshot, slotPlan = result.plan)
-                    return success(result.code)
                 }
                 val selected = s.profiles.find { it.id == s.activeProfileId }
                 val fixed = if (selected != null) listOf(selected).filter { it.kind == Kind.FIXED }

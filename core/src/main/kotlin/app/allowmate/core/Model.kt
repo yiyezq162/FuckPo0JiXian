@@ -50,7 +50,10 @@ data class State(
     val events: List<Event> = emptyList(), val activeProfileId: String? = null,
     val domesticExit: DomesticExit? = null, val nextProbeAllowed: Long = 0, val probeStatus: String = "NOT_CHECKED",
     val slotPlan: SlotPlan? = null,
-    val runtimeMode: RuntimeMode = RuntimeMode.STANDARD
+    val runtimeMode: RuntimeMode = RuntimeMode.STANDARD,
+    val layout: SlotLayout? = null,
+    val accountContext: String = java.util.UUID.randomUUID().toString(),
+    val globalBlock: String? = null
 ) : Serializable
 
 object Allocation {

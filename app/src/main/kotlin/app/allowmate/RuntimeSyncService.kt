@@ -39,8 +39,8 @@ class RuntimeSyncService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("runtime", "短时后台检查", NotificationManager.IMPORTANCE_LOW))
-        startForeground(2, NotificationCompat.Builder(this, "runtime").setSmallIcon(R.drawable.ic_allowmate)
-            .setContentTitle("白名单随行正在检查").setContentText("模块辅助短时检查，完成即退出").build())
+        startForeground(2, NotificationCompat.Builder(this, "runtime").setSmallIcon(R.drawable.ic_stat_allowmate)
+            .setContentTitle("白名单随行正在检查").setContentText("完成后自动退出").build())
         if (active?.isActive == true) return START_NOT_STICKY
         val controller = (application as AllowMateApp).controller
         active = scope.launch {

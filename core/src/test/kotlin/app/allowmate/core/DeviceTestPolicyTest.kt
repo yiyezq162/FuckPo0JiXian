@@ -19,4 +19,9 @@ class DeviceTestPolicyTest {
         assertFalse(DeviceTestPolicy.permitted(false, true, selected, setOf("allowCredentialImport")))
         assertFalse(DeviceTestPolicy.permitted(false, true, "app.allowmate.AuthorizedAccountTest", setOf("allowAccountRead")))
     }
+    @Test fun upgradeProxyReadCannotAuthorizeResetOrSlotWrite() {
+        assertTrue(DeviceTestPolicy.permitted(false, true, "app.allowmate.AuthorizedAccountTest#inspectUpgradeAndProxyGuard", setOf("allowUpgradeRead")))
+        assertFalse(DeviceTestPolicy.permitted(false, true, "app.allowmate.UiTest", setOf("allowUpgradeRead")))
+        assertFalse(DeviceTestPolicy.permitted(false, true, "app.allowmate.AuthorizedAccountTest#syncDedicatedSlots", setOf("allowUpgradeRead")))
+    }
 }
