@@ -1,0 +1,26 @@
+.gradle/
+.tools/
+**/build/
+local.properties
+*.iml
+.idea/
+dist/
+captures/
+*.jks
+*.keystore
+module/build/
+module/helper.dex.jar
+module/certificate.sha256
+.kotlin/
+.DS_Store
+# Private development and physical-device evidence stays local.
+/task_plan.md
+/findings.md
+/progress.md
+/docs/*
+!/docs/INSTALL.md
+!/docs/TESTING.md
+*.pem
+*.key
+.env
+.env.*

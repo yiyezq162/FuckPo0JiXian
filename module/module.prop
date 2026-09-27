@@ -1,0 +1,6 @@
+id=allowmate_helper
+name=白名单随行 · AllowMate 辅助入口
+version=0.4.0-preview
+versionCode=4
+author=AllowMate
+description=Magisk/KernelSU 事件辅助只读验收候选。APK负责所有HTTP；无挂载/网络规则/凭据。真机链路、待机和功耗未验证。
