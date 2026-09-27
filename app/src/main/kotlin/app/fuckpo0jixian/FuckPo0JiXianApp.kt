@@ -63,6 +63,8 @@ class Controller(private val context: Context) {
                 .collect { runCatching { runtime.publish(store.load()) }.onFailure { runtime.status.value = "模块状态保存失败 · 已降级" } }
         }
         if (store.load().demo) restoreDemo()
+        // Other devices show this name next to the slots this phone manages.
+        if (store.load().deviceName.isBlank()) runCatching { store.save(store.load().copy(deviceName = Build.MODEL.trim().take(24))) }
         wifiObserver.start { changed() }
         refreshSchedule()
         // An app update finishes cancelling the old install's PendingIntents a few seconds after the new
@@ -328,13 +330,13 @@ class Controller(private val context: Context) {
             drainPendingCheck()
         }
     }
-    private fun edit(scheduleNow: Boolean = false, block: (State) -> State) {
+    private fun edit(scheduleNow: Boolean = false, done: () -> String = { "已保存" }, block: (State) -> State) {
         scope.launch {
             manualPreview.value = null
             operation?.cancelAndJoin()
             requestJob?.cancelAndJoin()
             gate.withLock {
-                try { withContext(Dispatchers.IO) { store.save(block(store.load())) }; feedback.value = "已保存" }
+                try { withContext(Dispatchers.IO) { store.save(block(store.load())) }; feedback.value = done() }
                 catch (e: IllegalArgumentException) { feedback.value = statusText(e.message ?: "CONFIG_INVALID") }
                 catch (_: Exception) { feedback.value = "保存失败" }
             }
@@ -344,6 +346,18 @@ class Controller(private val context: Context) {
     }
     fun pause(value: Boolean) = edit(scheduleNow = !value) { it.copy(paused = value) }
     fun runtimeMode(value: RuntimeMode) = edit { it.copy(runtimeMode = value) }
+    fun deviceName(value: String) = edit { it.copy(deviceName = value.trim().take(24)) }
+    /** Labels the slots another device manages; local authority and Po0 are untouched. */
+    fun importPeers(peer: PeerLayout) {
+        var count = 0
+        edit(done = { if (count == 0) "没有需要更新的槽位" else "已标注 $count 个槽位" }) {
+            PeerImport.apply(it, peer).also { r -> count = r.changed.size }.state
+        }
+    }
+    fun exportText(): String {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
+        return RedactedExport.build(store.load(), "android", version, System.currentTimeMillis())
+    }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
     fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
     fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit(scheduleNow = true) {
@@ -392,12 +406,12 @@ class Controller(private val context: Context) {
         // Keep real and simulated credentials separate; discard network/account associations on switching.
         demo = SlotDemoPlatform()
         val base = State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
-            nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed)
+            nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName)
         if (enabled) demoState(base) else base
     }
     fun saveToken(value: String) = edit {
         val sameAccount = vault.read() == value.trim()
-        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed))
+        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName))
         vault.save(value.trim())
         credentialPresent.value = true
         it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = null, ownership = emptyList(), profiles = emptyList(), activeProfileId = null,
@@ -405,7 +419,7 @@ class Controller(private val context: Context) {
             accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
             globalBlock = if (sameAccount) it.globalBlock else null, budget = Budget(), status = "TOKEN_SAVED")
     }
-    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN"); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
+    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
     fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
     private fun demoWifi(): WifiObservation? = when (demoScenario) {
         0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())

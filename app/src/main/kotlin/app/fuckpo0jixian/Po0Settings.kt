@@ -1,5 +1,6 @@
 package app.fuckpo0jixian
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -49,6 +50,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
             ListRow("异常提醒", leading = { IconTile(Icons.Rounded.Notifications, colors.red) }, chevron = true, onClick = notifications)
         }
     }
+    item(key = "po0-devices") { DevicesSection(s, c, busy) }
     item(key = "po0-frequency") {
         Section(header = "检查频率", footer = "网络不变时只在本机对比出口 IP，变化了才查询 Po0，以减少接口请求。系统休眠时可能延后。") {
             ListRow("切换网络后", value = "约 3 秒")
@@ -160,4 +162,44 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
     }
     if (confirm) IosAlert("退出演示？", { confirm = false }, message = "清除演示数据，保留已保存的 Token，检查保持暂停。",
         actions = listOf(AlertAction("取消") { confirm = false }, AlertAction("退出", destructive = true) { c.demo(false); confirm = false }))
+}
+
+/** Each device authorizes its own slots; importing another device's export only labels the ones it manages. */
+@Composable private fun DevicesSection(s: State, c: Controller, busy: Boolean) {
+    val context = LocalContext.current
+    var rename by remember { mutableStateOf(false) }
+    var peer by remember { mutableStateOf<PeerLayout?>(null) }
+    Section(header = "多设备", footer = "每台设备只授权自己负责的槽位。导入其他设备的导出数据，只会标注它管理的槽位，不会授权或写入。") {
+        ListRow("本机名称", value = s.deviceName.ifBlank { "未设置" }, chevron = true, enabled = !busy) { rename = true }
+        ActionRow("从剪贴板导入其他设备的分工", enabled = !busy && s.snapshot != null) {
+            val text = context.getSystemService(ClipboardManager::class.java).primaryClip?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+            runCatching { PeerImport.parse(text) }.onSuccess { peer = it }.onFailure { c.feedback.value = statusText("IMPORT_INVALID") }
+        }
+    }
+    if (rename) {
+        var input by remember { mutableStateOf(s.deviceName) }
+        val colors = Apple.colors
+        IosAlert("本机名称", { rename = false }, message = "其他设备导入后，会用这个名字标注本机管理的槽位。", content = {
+            Spacer(Modifier.height(6.dp))
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(colors.fill).padding(horizontal = 10.dp, vertical = 9.dp)) {
+                BasicTextField(input, { input = it.take(24) }, Modifier.fillMaxWidth().testTag("device-name"), singleLine = true,
+                    textStyle = Apple.subhead.copy(color = colors.label), cursorBrush = SolidColor(colors.accent))
+            }
+        }, actions = listOf(AlertAction("取消") { rename = false },
+            AlertAction("保存", preferred = true, enabled = input.isNotBlank()) { c.deviceName(input); rename = false }))
+    }
+    peer?.let { p ->
+        val preview = remember(p, s) { runCatching { PeerImport.apply(s, p) } }
+        val error = (preview.exceptionOrNull() as? IllegalArgumentException)?.message
+        val count = preview.getOrNull()?.changed?.size ?: 0
+        IosAlert("导入「${p.device}」的分工？", { peer = null },
+            message = when {
+                error != null -> statusText(error)
+                count == 0 -> "本机已经是最新的标注。"
+                else -> "将把 $count 个槽位标注为其他设备管理。本机负责的槽位不受影响，也不会写入 Po0。"
+            },
+            actions = if (error != null || count == 0) listOf(AlertAction("好", preferred = true) { peer = null })
+                else listOf(AlertAction("取消") { peer = null }, AlertAction("导入", preferred = true) { c.importPeers(p); peer = null }))
+    }
 }

@@ -2,6 +2,9 @@ package app.fuckpo0jixian
 
 import android.Manifest
 import android.app.ActivityManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
@@ -30,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -249,6 +253,24 @@ private fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>, 
         if (confirm) IosAlert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。", actions = listOf(
             AlertAction("取消") { confirm = false },
             AlertAction("清空", destructive = true) { c.clearHistory(); confirm = false }))
+    }
+    item(key = "rec-export") {
+        val context = LocalContext.current
+        var confirm by remember { mutableStateOf(false) }
+        Section(header = "复盘") { ActionRow("导出脱敏数据") { confirm = true } }
+        if (confirm) IosAlert("导出脱敏数据", { confirm = false },
+            message = "Token 已去除，账户标识、Wi-Fi 名称和接入点不导出；IP 只保留前两段（如 203.0.*.0/24）。可用于复盘，也可在其他设备上导入分工。",
+            actions = listOf(
+                AlertAction("分享", preferred = true) {
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.exportText())
+                        .putExtra(Intent.EXTRA_SUBJECT, "去他妈的鸡险 · 脱敏数据")
+                    context.startActivity(Intent.createChooser(send, "导出脱敏数据")); confirm = false
+                },
+                AlertAction("复制") {
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("FuckPo0JiXian", c.exportText()))
+                    c.feedback.value = "已复制脱敏数据"; confirm = false
+                },
+                AlertAction("取消") { confirm = false }))
     }
     item(key = "rec-events") {
         val events = s.events.filter { it.time >= System.currentTimeMillis() - c.policy.retentionMs }.takeLast(30).reversed()

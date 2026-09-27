@@ -40,7 +40,9 @@ data class Policy(val debounceMs: Long = 3_000, val minIntervalMs: Long = 10_000
                   val maxBackoffMs: Long = 3_600_000, val retentionMs: Long = 7 * 86_400_000L,
                   /** How long an exit observation counts as current evidence for writes and authorization. */
                   val freshnessMs: Long = 120_000,
-                  val remoteRefreshMs: Long = 3_600_000, val probeIntervalMs: Long = 10_000) : Serializable
+                  val remoteRefreshMs: Long = 3_600_000, val probeIntervalMs: Long = 10_000,
+                  /** A co-managed slot another device changed this recently is left alone. */
+                  val sharedQuietMs: Long = 30 * 60_000L) : Serializable
 data class Observation(val time: Long, val cidr: Cidr, val networkKind: String) : Serializable
 data class Event(val time: Long, val code: String) : Serializable
 /** Explicit user-authorized server slots; never inferred from list positions. */
@@ -62,7 +64,9 @@ data class State(
     val runtimeMode: RuntimeMode = RuntimeMode.STANDARD,
     val layout: SlotLayout? = null,
     val accountContext: String = java.util.UUID.randomUUID().toString(),
-    val globalBlock: String? = null
+    val globalBlock: String? = null,
+    /** How this device labels itself in exports and on other devices; display only. */
+    val deviceName: String = ""
 ) : Serializable
 
 object Allocation {

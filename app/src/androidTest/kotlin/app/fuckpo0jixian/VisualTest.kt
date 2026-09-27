@@ -35,10 +35,12 @@ class VisualTest {
             // Synthetic dedicated-slot configuration; no credential, paused, no requests.
             c.store.save(State(demo = true, paused = true, mode = Mode.AUTO, snapshot = Snapshot(Cidr("203.0.113.0/24"),
                 listOf(Entry(Cidr("198.51.100.0/24"), 0), Entry(Cidr("203.0.113.0/24"), 1), Entry(Cidr("192.0.2.0/24"))), 5),
-                layout = SlotLayout(slots = listOf(ManagedSlot(0, "家庭示例", SlotPurpose.FIXED, Writer.LOCAL, status = "IDENTITY_REQUIRED"),
+                deviceName = "示例手机",
+                layout = SlotLayout(slots = listOf(ManagedSlot(0, "家庭示例", SlotPurpose.FIXED, Writer.LOCAL, status = "IDENTITY_REQUIRED", shared = true),
                     ManagedSlot(1, "公司示例", SlotPurpose.FIXED, Writer.LOCAL),
                     ManagedSlot(2, "本机移动", SlotPurpose.MOBILE, Writer.LOCAL),
-                    ManagedSlot(3, "另一台手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE), ManagedSlot(4, "保留用途"))),
+                    ManagedSlot(3, "笔记本外出", SlotPurpose.MOBILE, Writer.OTHER_DEVICE, owner = "Mac", status = "PEER_UPDATED",
+                        changedAt = System.currentTimeMillis()), ManagedSlot(4, "保留用途"))),
                 networkKey = "demo", status = "PRESENT_CURRENT_CHECK", lastCheck = System.currentTimeMillis()))
         }
         try {
@@ -65,6 +67,18 @@ class VisualTest {
             rule.onNodeWithText("保存只修改本机配置，开启自动同步后才会写入 Po0。").performScrollTo()
             capture("slot-authorization.png")
             rule.onNodeWithText("取消").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasTestTag("slot-4"))
+            rule.onNodeWithTag("slot-4").performClick()
+            capture("slot-other-device.png")
+            rule.onNodeWithText("取消").performClick()
+            rule.onNodeWithTag("tab-2").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("从剪贴板导入其他设备的分工"))
+            capture("multi-device.png")
+            rule.onNodeWithTag("tab-3").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("导出脱敏数据"))
+            rule.onNodeWithText("导出脱敏数据").performClick()
+            capture("export-dialog.png")
+            rule.onAllNodesWithText("取消").onLast().performClick()
             rule.onNodeWithTag("tab-2").performClick()
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("更换 Token"))
             rule.onNodeWithText("更换 Token").performClick()

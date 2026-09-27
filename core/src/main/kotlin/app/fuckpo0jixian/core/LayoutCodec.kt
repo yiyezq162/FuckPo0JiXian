@@ -14,6 +14,7 @@ internal object LayoutCodec {
             put("identityId", s.identityId); put("automatic", s.automatic); put("allowUnknownWifi", s.allowUnknownWifi)
             put("authorized", s.authorized); put("baseline", s.baseline?.value); put("status", s.status)
             put("legacyPending", s.legacyPending?.value); put("temporaryHold", s.temporaryHold)
+            put("owner", s.owner); put("shared", s.shared); put("changedAt", s.changedAt)
         }) } }
         putJsonArray("identities") { l.identities.forEach { n -> add(buildJsonObject {
             put("id", n.id); put("name", n.name); put("ssid", n.ssid)
@@ -30,7 +31,8 @@ internal object LayoutCodec {
         val s = e.jsonObject
         ManagedSlot(s.l("number").toInt(), s.s("name"), SlotPurpose.valueOf(s.s("purpose")), Writer.valueOf(s.s("writer")),
             s.n("identityId"), s.b("automatic"), s.b("allowUnknownWifi"), s.b("authorized"), s.n("baseline")?.let(::Cidr),
-            s.s("status"), s.n("legacyPending")?.let(::Cidr), s.b("temporaryHold"))
+            s.s("status"), s.n("legacyPending")?.let(::Cidr), s.b("temporaryHold"),
+            s.n("owner") ?: "", s.n("shared")?.toBooleanStrictOrNull() ?: false, s.n("changedAt")?.toLongOrNull() ?: 0)
     }, o.getValue("identities").jsonArray.map { e ->
         val n = e.jsonObject
         NetworkIdentity(n.s("id"), n.s("name"), n.s("ssid"), n.getValue("aps").jsonArray.map {

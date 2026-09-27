@@ -37,6 +37,30 @@ class SlotUiTest {
         rule.onNodeWithContentDescription("未知 Wi-Fi 也可更新").performScrollTo().assertIsOff()
         rule.onNodeWithText("取消").performClick()
     }
+    @Test fun peerImportLabelsOnlyForeignSlotsAndExportIsRedacted() {
+        demo(); val requests = NetworkTransport.requests.get()
+        val export = c.exportText()
+        listOf("Example Home", "02:11:22:33:44:01", "192.0.2.0/24", "pgnfw_", c.store.load().accountContext).forEach {
+            assertFalse("export leaked $it", export.contains(it))
+        }
+        // The Mac's export: it manages slot 5 and co-manages the home slot that this phone also manages.
+        val mac = State(deviceName = "Mac", snapshot = c.store.load().snapshot, layout = SlotLayout(slots = listOf(
+            ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, shared = true),
+            ManagedSlot(4, "笔记本外出", SlotPurpose.MOBILE, Writer.LOCAL))))
+        rule.runOnUiThread {
+            rule.activity.getSystemService(android.content.ClipboardManager::class.java)
+                .setPrimaryClip(android.content.ClipData.newPlainText("t", RedactedExport.build(mac, "macos", "t", 1L)))
+        }
+        rule.onNodeWithTag("tab-2").performClick()
+        rule.onNodeWithTag("page-list").performScrollToNode(hasText("从剪贴板导入其他设备的分工"))
+        rule.onNodeWithText("从剪贴板导入其他设备的分工").performClick()
+        rule.onNodeWithText("导入", useUnmergedTree = true).performClick()
+        rule.waitUntil(5_000) { c.store.load().layout!!.slots.find { it.number == 4 }?.owner == "Mac" }
+        val slots = c.store.load().layout!!.slots.associateBy { it.number }
+        assertEquals(Writer.OTHER_DEVICE, slots.getValue(4).writer); assertFalse(slots.getValue(4).authorized)
+        assertEquals(Writer.LOCAL, slots.getValue(0).writer); assertTrue(slots.getValue(0).authorized)
+        assertEquals(requests, NetworkTransport.requests.get())
+    }
     @Test fun unassignedRecordCountsTowardFullCapacityAndOtherPhoneHasNoLocalRights() {
         demo()
         rule.onNodeWithText("已用 5 / 5").assertExists()

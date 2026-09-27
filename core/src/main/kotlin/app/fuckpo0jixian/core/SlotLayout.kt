@@ -4,7 +4,8 @@ import java.io.Serializable
 
 enum class SlotPurpose { FIXED, MOBILE, RESERVED }
 enum class Writer { LOCAL, OTHER_DEVICE, EXTERNAL }
-enum class WifiSecurity { WPA2, WPA3, ENTERPRISE, ENTERPRISE_WPA3, OPEN, UNKNOWN }
+/** GATEWAY: desktop networks are identified by the router's MAC (no location permission needed). */
+enum class WifiSecurity { WPA2, WPA3, ENTERPRISE, ENTERPRISE_WPA3, OPEN, UNKNOWN, GATEWAY }
 data class AuthorizedAp(val bssid: String, val security: WifiSecurity) : Serializable
 data class NetworkIdentity(val id: String, val name: String, val ssid: String,
                            val aps: Set<AuthorizedAp>) : Serializable
@@ -24,7 +25,13 @@ data class ManagedSlot(val number: Int, val name: String = "", val purpose: Slot
                        val automatic: Boolean = false, val allowUnknownWifi: Boolean = false,
                        val authorized: Boolean = false, val baseline: Cidr? = null,
                        val status: String = "UNMANAGED", val legacyPending: Cidr? = null,
-                       val temporaryHold: Boolean = false) : Serializable
+                       val temporaryHold: Boolean = false,
+                       /** Display label of the device that manages an OTHER_DEVICE slot; never an authorization. */
+                       val owner: String = "",
+                       /** LOCAL fixed slot that other devices on the same network may also update. */
+                       val shared: Boolean = false,
+                       /** When this device last saw someone else change the occupant. */
+                       val changedAt: Long = 0) : Serializable
 data class SlotPending(val account: String, val version: Long, val slot: Int, val operation: String,
                        val original: Cidr?, val candidate: Cidr, val identityId: String?,
                        val before: Snapshot, val time: Long) : Serializable
@@ -69,7 +76,10 @@ object LayoutRules {
                 (slot.automatic && (old?.writer != slot.writer || old.purpose != slot.purpose)))
         require(!granting || acknowledge) { "AUTHORIZATION_REQUIRED" }
         val changedAuthority = old?.purpose != slot.purpose || old.writer != slot.writer
-        val next = slot.copy(name = slot.name.trim().take(40),
+        val shared = slot.shared && slot.writer == Writer.LOCAL && slot.purpose == SlotPurpose.FIXED
+        // Accepting other writers relaxes conflict protection, so it needs the same explicit confirmation.
+        require(!shared || old?.shared == true || acknowledge) { "AUTHORIZATION_REQUIRED" }
+        val next = slot.copy(name = slot.name.trim().take(40), owner = slot.owner.trim().take(24), shared = shared,
             authorized = slot.writer == Writer.LOCAL && slot.purpose != SlotPurpose.RESERVED && (acknowledge || (old?.authorized == true && !changedAuthority)),
             baseline = if (acknowledge) occupant else old?.baseline,
             identityId = if (changedAuthority) null else old.identityId,
@@ -108,7 +118,8 @@ data class TargetDecision(val slot: ManagedSlot? = null, val code: String, val n
 object SlotSelection {
     fun select(layout: SlotLayout, session: NetworkSession, now: Long): TargetDecision {
         val wifi = session.wifi
-        if (session.kind == "wifi" || session.kind == "Wi-Fi") {
+        // "lan": a desktop network identified by its gateway, matched exactly like a Wi-Fi AP.
+        if (session.kind == "wifi" || session.kind == "Wi-Fi" || session.kind == "lan") {
             if (wifi?.usable(now, session.key) != true) return TargetDecision(code = "WIFI_UNAVAILABLE")
             val exact = layout.identities.filter { it.ssid == wifi.ssid && AuthorizedAp(wifi.bssid!!, wifi.security) in it.aps }
             if (exact.size > 1) return TargetDecision(code = "IDENTITY_AMBIGUOUS")

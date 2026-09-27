@@ -66,16 +66,23 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                 return finish(code)
             }
             // v1 carried a narrower mobile authorization. Reconcile, never infer identity or unknown-WiFi rights.
+            // What this device saw at its previous check; a difference means someone else wrote the slot.
+            val previous = store.load().snapshot
             val updated = layout.slots.map { slot ->
                 val occupant = before.entries.find { it.slot == slot.number }?.cidr
+                val changedElsewhere = previous != null && previous.entries.find { it.slot == slot.number }?.cidr != occupant
                 when {
                     slot.status == "LEGACY_RECONCILE" -> slot.copy(
                         authorized = occupant == slot.baseline || (slot.legacyPending != null && occupant == slot.legacyPending),
                         baseline = if (slot.legacyPending != null && occupant == slot.legacyPending) occupant else slot.baseline,
                         legacyPending = null, status = if (occupant == slot.baseline || (slot.legacyPending != null && occupant == slot.legacyPending)) "MIGRATED_CELLULAR_ONLY" else "SLOT_CONFLICT")
-                    slot.authorized && occupant != slot.baseline -> slot.copy(authorized = false, status = "SLOT_CONFLICT")
-                    slot.writer != Writer.LOCAL && s.snapshot != store.load().snapshot &&
-                        store.load().snapshot?.entries?.find { it.slot == slot.number }?.cidr != occupant -> slot.copy(status = "EXTERNAL_CHANGE")
+                    // A co-managed slot follows the other devices' writes instead of treating them as a takeover.
+                    // An emptied slot is not a peer write (Po0 has no delete call), so it still conflicts.
+                    slot.authorized && occupant != slot.baseline && slot.shared && occupant != null ->
+                        slot.copy(baseline = occupant, status = "PEER_UPDATED", changedAt = t)
+                    slot.authorized && occupant != slot.baseline -> slot.copy(authorized = false, status = "SLOT_CONFLICT", changedAt = t)
+                    slot.writer == Writer.OTHER_DEVICE && changedElsewhere -> slot.copy(status = "PEER_UPDATED", changedAt = t)
+                    slot.writer != Writer.LOCAL && changedElsewhere -> slot.copy(status = "EXTERNAL_CHANGE", changedAt = t)
                     else -> slot
                 }
             }
@@ -99,6 +106,9 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
             val occupant = before.entries.find { it.slot == target.number }?.cidr
             if (occupant != target.baseline) return blocked("SLOT_CONFLICT")
             if (occupant == before.current) return blocked("SLOT_CURRENT")
+            // Another device just wrote something else here: it is probably on a different network claiming the same
+            // slot. Back off rather than flip the value back and forth; a later check decides again.
+            if (target.shared && t - target.changedAt in 0 until policy.sharedQuietMs) return blocked("SHARED_RECENT")
             if (before.contains(before.current)) return blocked("COVERED_OTHER_SLOT")
             if (occupant == null && before.remaining == 0) return blocked("CAPACITY_FULL")
             live()

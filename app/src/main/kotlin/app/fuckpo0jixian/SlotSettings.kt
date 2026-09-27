@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.location.LocationManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -56,6 +59,12 @@ internal fun backgroundLocationGranted(context: Context) = Build.VERSION.SDK_INT
 
 internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固定网络"; SlotPurpose.MOBILE -> "设备移动"; SlotPurpose.RESERVED -> "保留用途" }
 internal fun writerText(w: Writer) = when (w) { Writer.LOCAL -> "本机"; Writer.OTHER_DEVICE -> "其他设备"; Writer.EXTERNAL -> "外部 / 未知" }
+/** Who writes this slot, as specific as the configuration allows. */
+internal fun managerText(slot: ManagedSlot) = when (slot.writer) {
+    Writer.LOCAL -> if (slot.shared) "本机 · 共管" else "本机"
+    Writer.OTHER_DEVICE -> slot.owner.ifBlank { "其他设备" }
+    Writer.EXTERNAL -> "外部 / 未知"
+}
 @Composable internal fun purposeColor(p: SlotPurpose) = when (p) {
     SlotPurpose.FIXED -> Apple.colors.accent; SlotPurpose.MOBILE -> Apple.colors.green; SlotPurpose.RESERVED -> Apple.colors.gray
 }
@@ -111,7 +120,7 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
         "旧配置已迁移，固定槽需要重新绑定 Wi-Fi".takeIf { s.layout?.notices?.contains("MIGRATED_WIFI_POLICY_OFF") == true },
         s.globalBlock?.let(::statusText),
         "有待确认的写入，下次检查会先核对".takeIf { s.layout?.pending != null },
-        "后台无法识别 Wi-Fi：请在固定槽中开启「后台识别」".takeIf { !s.demo && !background &&
+        "后台无法识别 Wi-Fi：请在固定槽中开启「Wi-Fi 识别」".takeIf { !s.demo && !background &&
             s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId != null } == true })
     if (notices.isNotEmpty()) item(key = "wl-notices") {
         Section(header = "需要注意", inset = 50.dp) {
@@ -134,9 +143,9 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
     }
 }
 
-private val healthy = setOf("SLOT_CURRENT", "SLOT_UPDATED", "RECOVERED_VERIFIED", "AUTHORIZED_LOCAL")
+private val healthy = setOf("SLOT_CURRENT", "SLOT_UPDATED", "RECOVERED_VERIFIED", "AUTHORIZED_LOCAL", "PEER_UPDATED")
 private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_AMBIGUOUS", "WIFI_SECURITY_CHANGED", "EXTERNAL_CHANGE",
-    "COVERED_OTHER_SLOT", "PENDING_REVIEW", "PENDING_CONFIG_CHANGED", "LEGACY_UNINITIALIZED", "REBIND_REQUIRED")
+    "COVERED_OTHER_SLOT", "PENDING_REVIEW", "SHARED_RECENT", "PENDING_CONFIG_CHANGED", "LEGACY_UNINITIALIZED", "REBIND_REQUIRED")
 
 @Composable private fun SlotRow(slot: ManagedSlot, remote: String?, enabled: Boolean, onClick: () -> Unit) {
     val colors = Apple.colors
@@ -150,7 +159,7 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Text(remote ?: "空", style = Apple.subhead, color = colors.secondary)
             }
-            Text("${purposeText(slot.purpose)} · ${writerText(slot.writer)}", style = Apple.footnote, color = colors.secondary)
+            Text("${purposeText(slot.purpose)} · ${managerText(slot)}", style = Apple.footnote, color = colors.secondary)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Dot(tint); Text(statusText(slot.status), style = Apple.footnote, color = if (tint == colors.orange) colors.orange else colors.secondary)
             }
@@ -172,20 +181,41 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     var automatic by remember { mutableStateOf(original.automatic) }
     var unknown by remember { mutableStateOf(original.allowUnknownWifi) }
     var hold by remember { mutableStateOf(original.temporaryHold) }
+    var owner by remember { mutableStateOf(original.owner) }
+    var shared by remember { mutableStateOf(original.shared) }
     var acknowledge by remember { mutableStateOf(false) }
     var bind by remember { mutableStateOf<Boolean?>(null) }
     var showAps by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var bindNext by remember { mutableStateOf(false) }
     val wifi by c.wifiObservation.collectAsState()
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { c.foreground(); c.refreshWifi() }
     val context = LocalContext.current
     val background = rememberBackgroundLocation()
-    var backgroundDenied by remember { mutableStateOf(false) }
-    val backgroundPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        backgroundDenied = !granted; c.foreground()
-    }
     val foregroundGranted = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    // One tap walks the whole chain: location switch → Wi-Fi permission → "allow all the time". A denial that
+    // returns instantly means the system will not ask again, so open the app's permission page instead.
+    var askedAt by remember { mutableLongStateOf(0L) }
+    fun openAppSettings() = context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+    fun instant() = SystemClock.elapsedRealtime() - askedAt < 500
+    val backgroundPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        c.foreground(); c.refreshWifi(); if (!granted && instant()) openAppSettings()
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        c.foreground(); c.refreshWifi()
+        val fine = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (fine && Build.VERSION.SDK_INT >= 31 && !backgroundLocationGranted(context)) {
+            askedAt = SystemClock.elapsedRealtime(); backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else if (!fine && instant()) openAppSettings()
+    }
+    val locationOn = context.getSystemService(LocationManager::class.java).isLocationEnabled
+    fun enableWifiAccess() {
+        askedAt = SystemClock.elapsedRealtime()
+        when {
+            !locationOn -> context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            !foregroundGranted -> permission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+            else -> backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
     val identity = s.layout?.identities?.find { it.id == original.identityId }
     val remote = s.snapshot?.entries?.find { it.slot == original.number }?.cidr
     val colors = Apple.colors
@@ -200,7 +230,7 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     }
     fun save() {
         val candidate = original.copy(name = name, purpose = purpose, writer = writer, automatic = automatic,
-            allowUnknownWifi = unknown, temporaryHold = hold)
+            allowUnknownWifi = unknown, temporaryHold = hold, owner = owner, shared = shared)
         val validation = runCatching { LayoutRules.saveSlot(s, candidate, acknowledge, System.currentTimeMillis()) }
         if (validation.isSuccess) {
             c.configureSlot(candidate, acknowledge)
@@ -228,7 +258,8 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                     Section { ListRow(message, titleColor = colors.red,
                         leading = { Icon(Icons.Rounded.Warning, null, tint = colors.red, modifier = Modifier.size(22.dp)) }) }
                 }
-                Section(header = "名称", footer = "平台编号 ${original.number} · 当前记录 ${remote?.value ?: "空"}") {
+                Section(header = "名称", footer = "平台编号 ${original.number} · 当前记录 ${remote?.value ?: "空"}" +
+                    if (original.changedAt > 0) " · ${time(original.changedAt)} 发现他处改动" else "") {
                     Box(Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
                         if (name.isEmpty()) Text("例如：家、公司、这台手机", style = Apple.body, color = colors.tertiary)
                         BasicTextField(name, { name = it.take(40) }, Modifier.fillMaxWidth().testTag("slot-name"), singleLine = true,
@@ -241,29 +272,37 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                     SlotPurpose.RESERVED -> "留作他用，不会自动更新。"
                 }) { SegmentedControl(SlotPurpose.entries.map(::purposeText), purpose.ordinal, { purpose = SlotPurpose.entries[it] }) }
                 Section(header = "管理者", footer = when (writer) {
-                    Writer.LOCAL -> "由这台手机写入此槽。"
-                    Writer.OTHER_DEVICE -> "由另一台设备管理，本机只读。"
+                    Writer.LOCAL -> "由这台设备写入此槽。"
+                    Writer.OTHER_DEVICE -> "由另一台设备管理，本机只读，变化会标注出来。"
                     Writer.EXTERNAL -> "来源不明，本机不会改动。"
-                }) { SegmentedControl(Writer.entries.map(::writerText), writer.ordinal, { writer = Writer.entries[it] }) }
+                }) {
+                    SegmentedControl(Writer.entries.map(::writerText), writer.ordinal, { writer = Writer.entries[it] })
+                    if (writer == Writer.OTHER_DEVICE) OwnerField(owner) { owner = it }
+                }
                 if (writer == Writer.LOCAL && purpose != SlotPurpose.RESERVED) {
                     Section(header = "自动更新", footer = if (purpose == SlotPurpose.MOBILE)
                         "每台手机只能有一个自动移动槽，默认只在移动数据下更新。多台手机请各自使用独立槽位。" else null) {
                         ToggleRow("自动更新此槽", automatic, { automatic = it })
+                        if (purpose == SlotPurpose.FIXED)
+                            ToggleRow("与其他设备共管", shared, { shared = it }, subtitle = "同一网络的电脑或手机也可更新此槽")
                         if (purpose == SlotPurpose.MOBILE) {
                             ToggleRow("未知 Wi-Fi 也可更新", unknown, { unknown = it })
                             ToggleRow("锁定当前 IP", hold, { hold = it }, subtitle = "网络变化时不替换这一格")
                         }
                     }
                     // Show the saved authorization; the switch only grants a new one (and re-bases on this save).
-                    val authorizedNow = original.authorized && purpose == original.purpose && writer == original.writer
-                    if (authorizedNow && !acknowledge) Section(footer = "授权基线：${original.baseline?.value ?: "空槽"}。此槽被其他设备改动时会自动取消授权。") {
+                    val authorizedNow = original.authorized && purpose == original.purpose && writer == original.writer &&
+                        (original.shared || !shared || purpose != SlotPurpose.FIXED)
+                    if (authorizedNow && !acknowledge) Section(footer = "授权基线：${original.baseline?.value ?: "空槽"}。" +
+                        if (original.shared) "共管设备的写入会被接受；刚被改成其他值时本机会先等待。" else "此槽被其他设备改动时会自动取消授权。") {
                         ListRow("授权本机管理", trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("已授权", style = Apple.body, color = colors.green)
                                 Icon(Icons.Rounded.Check, null, tint = colors.green, modifier = Modifier.size(20.dp))
                             }
                         })
-                    } else Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。请确认没有其他设备在写入此槽。") {
+                    } else Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。" +
+                        if (shared && purpose == SlotPurpose.FIXED) "同一网络的其他设备也可写入此槽。" else "请确认没有其他设备在写入此槽。") {
                         ToggleRow("授权本机管理", acknowledge, { acknowledge = it })
                     }
                 }
@@ -274,24 +313,23 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                 }
                 if (bindable) {
                     val usable = wifi?.usable(System.currentTimeMillis(), if (s.demo) "demo" else c.currentNetworkKey.value ?: "") == true
-                    Section(header = "Wi-Fi 绑定", footer = "自动更新要在后台识别 Wi-Fi，需要把位置权限设为「始终允许」。只读取 Wi-Fi 名称和接入点，不获取你的位置。Android 11 及以下请使用手动更新。") {
+                    val access = when {
+                        s.demo -> null
+                        Build.VERSION.SDK_INT < 31 -> "仅手动更新"
+                        !locationOn -> "定位服务已关闭"
+                        !foregroundGranted -> "未开启"
+                        !background -> "仅前台"
+                        else -> "已开启"
+                    }
+                    Section(header = "Wi-Fi 绑定", footer = "只读取 Wi-Fi 名称和接入点，不获取位置。后台自动更新需要位置权限「始终允许」。") {
                         if (bindNext && identity == null) ListRow("已保存。连接到要绑定的 Wi-Fi，然后点「绑定当前 Wi-Fi」。", titleColor = colors.green)
                         ListRow("已绑定", value = identity?.ssid ?: "未绑定")
                         ListRow("当前 Wi-Fi", value = if (usable) wifi?.ssid else "无法读取")
-                        if (!usable) {
-                            ActionRow("允许读取 Wi-Fi 信息") { permission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)) }
-                            ActionRow("重新读取", onClick = c::refreshWifi)
+                        access?.let { value ->
+                            ListRow("Wi-Fi 识别", value = value)
+                            if (Build.VERSION.SDK_INT >= 31 && value != "已开启") ActionRow("一键开启 Wi-Fi 识别", onClick = ::enableWifiAccess)
                         }
                         ActionRow("绑定当前 Wi-Fi", enabled = usable && !busy) { bind = false }
-                        if (!s.demo && Build.VERSION.SDK_INT >= 31) {
-                            ListRow("后台识别", value = if (background) "已开启" else "未开启")
-                            if (!background && foregroundGranted) {
-                                ActionRow("开启后台识别（始终允许）") { backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
-                                if (backgroundDenied) ActionRow("在系统设置中选择「始终允许」") {
-                                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
-                                }
-                            }
-                        }
                         if (identity != null) {
                             ActionRow("添加当前接入点", enabled = usable && !busy) { bind = true }
                             ListRow("已授权接入点", value = "${identity.aps.size} 个", chevron = !showAps) { showAps = !showAps }
@@ -341,5 +379,24 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
             },
             actions = listOf(AlertAction("取消", onClick = c::cancelManual),
                 AlertAction("确认更新", preferred = true, enabled = !busy, onClick = c::confirmManual)))
+    }
+}
+
+/** Name of the device that manages the slot, with the three common choices one tap away. */
+@Composable private fun OwnerField(owner: String, onChange: (String) -> Unit) {
+    val colors = Apple.colors
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(colors.fill).padding(horizontal = 10.dp, vertical = 9.dp)) {
+            if (owner.isEmpty()) Text("设备名称，例如 Mac、办公室电脑", style = Apple.subhead, color = colors.tertiary)
+            BasicTextField(owner, { onChange(it.take(24)) }, Modifier.fillMaxWidth().testTag("slot-owner"), singleLine = true,
+                textStyle = Apple.subhead.copy(color = colors.label), cursorBrush = SolidColor(colors.accent))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Mac", "Windows", "另一台手机").forEach { choice ->
+                Text(choice, style = Apple.footnote, color = if (owner == choice) Color.White else colors.accent,
+                    modifier = Modifier.clip(CircleShape).background(if (owner == choice) colors.accent else colors.accent.copy(alpha = 0.12f))
+                        .clickable(role = Role.Button) { onChange(choice) }.padding(horizontal = 12.dp, vertical = 6.dp))
+            }
+        }
     }
 }

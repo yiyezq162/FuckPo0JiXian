@@ -16,7 +16,7 @@ object StateCodec {
         put("version", 2); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
         put("accountContext", s.accountContext); put("globalBlock", s.globalBlock)
         put("layout", s.layout?.let(LayoutCodec::encode) ?: JsonNull)
-        put("runtimeMode", s.runtimeMode.name)
+        put("runtimeMode", s.runtimeMode.name); put("deviceName", s.deviceName)
         put("fixed", s.budget.fixed); put("mobile", s.budget.mobile)
         put("lastCheck", s.lastCheck); put("lastSuccess", s.lastSuccess); put("nextAllowed", s.nextAllowed)
         put("failures", s.failures); put("authBlocked", s.authBlocked); put("networkKey", s.networkKey); put("status", s.status)
@@ -63,7 +63,8 @@ object StateCodec {
                     p.optional("lastMobile")?.let(::Cidr), p.optional("pendingMobile")?.let(::Cidr))
             }, o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD,
             o["layout"]?.takeUnless { it is JsonNull }?.jsonObject?.let(LayoutCodec::decode),
-            o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"))
+            o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"),
+            o.optional("deviceName") ?: "")
         return if (o.l("version") == 1L) LayoutRules.migrate(state) else state
     }
 }
