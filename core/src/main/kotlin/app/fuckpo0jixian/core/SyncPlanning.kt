@@ -15,6 +15,14 @@ private val settled = setOf("SLOT_CURRENT", "SLOT_UPDATED", "PRESENT_CURRENT_CHE
 
 object LocalCheck {
     /**
+     * The exit-probe throttle belongs to a network: a successful probe on the previous network must not hold back
+     * the first probe on a new one, or the write right after a network change would be refused. Backoff after a
+     * failed probe still applies everywhere.
+     */
+    fun probeAllowed(s: State, networkKey: String, now: Long): Boolean =
+        now >= s.nextProbeAllowed || (s.probeStatus == "PROBE_OBSERVED" && s.domesticExit?.networkKey != networkKey)
+
+    /**
      * Fallback runs may skip Po0 when the domestic exit just observed on this network matches the exit Po0
      * reported at the last successful check on the same network. Any doubt means a full remote check.
      * Configuration edits reset lastSuccess, so they always reach Po0.

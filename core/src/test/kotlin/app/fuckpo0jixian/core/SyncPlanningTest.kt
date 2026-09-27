@@ -63,4 +63,11 @@ class SyncPlanningTest {
         assertFalse(NetworkHistory.summarize(listOf(Observation(86_399_000, a, "x"), Observation(86_401_000, a, "x")), 86_401_000).single().common)
         assertTrue(NetworkHistory.summarize(rows, 9 * 86_400_000L).isEmpty())
     }
+    @Test fun probeThrottleIsPerNetworkButFailuresStillBackOff() {
+        val s = State(nextProbeAllowed = 10_000, probeStatus = "PROBE_OBSERVED", domesticExit = DomesticExit("192.0.2.1", 0, "old"))
+        assertFalse(LocalCheck.probeAllowed(s, "old", 5_000))
+        assertTrue(LocalCheck.probeAllowed(s, "new", 5_000))
+        assertFalse(LocalCheck.probeAllowed(s.copy(probeStatus = "PROBE_FAILED"), "new", 5_000))
+        assertTrue(LocalCheck.probeAllowed(s, "old", 10_000))
+    }
 }

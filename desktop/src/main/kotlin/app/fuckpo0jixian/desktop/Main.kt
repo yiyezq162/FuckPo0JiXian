@@ -1,6 +1,7 @@
 package app.fuckpo0jixian.desktop
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.res.loadImageBitmap
@@ -47,8 +48,12 @@ private object SingleInstance {
 }
 
 fun main(args: Array<String>) {
-    // Menu bar icons on macOS are template images: the system tints them to match the menu bar.
-    if (os == Os.MAC) System.setProperty("apple.awt.enableTemplateImages", "true")
+    if (os == Os.MAC) {
+        // Menu bar icons on macOS are template images: the system tints them to match the menu bar.
+        System.setProperty("apple.awt.enableTemplateImages", "true")
+        // Title bar follows the system light / dark appearance like the content does.
+        System.setProperty("apple.awt.application.appearance", "system")
+    }
     if (!SingleInstance.acquire()) exitProcess(0)
     val controller = DesktopController()
     controller.start()
@@ -56,29 +61,53 @@ fun main(args: Array<String>) {
         var visible by remember { mutableStateOf("--background" !in args) }
         SingleInstance.onShow = { visible = true }
         val icon = remember { BitmapPainter(useResource("icon.png", ::loadImageBitmap)) }
-        // Monochrome glyph on macOS (black/white picked by appearance in case templates are unsupported);
-        // the colour icon on Windows, where tray icons are normally coloured.
-        val dark = isSystemInDarkTheme()
-        val trayIcon = remember(dark) {
-            if (os != Os.MAC) icon else BitmapPainter(useResource(if (dark) "tray-white.png" else "tray-black.png", ::loadImageBitmap))
-        }
-        val tray = rememberTrayState()
         val state by controller.store.flow.collectAsState()
-        LaunchedEffect(Unit) {
-            runCatching { Desktop.getDesktop().addAppEventListener(AppReopenedListener { visible = true }) }
-            controller.alerts.collect { tray.sendNotification(Notification("白名单需要处理", it, Notification.Type.Warning)) }
+        val quit = { controller.stop(); exitApplication() }
+        LaunchedEffect(Unit) { runCatching { Desktop.getDesktop().addAppEventListener(AppReopenedListener { visible = true }) } }
+        if (os == Os.MAC) MacStatusItem(controller, state.paused, show = { visible = true }, quit = quit)
+        else {
+            // Windows: the colour icon, as tray icons normally are there.
+            val tray = rememberTrayState()
+            LaunchedEffect(Unit) { controller.alerts.collect { tray.sendNotification(Notification("白名单需要处理", it, Notification.Type.Warning)) } }
+            Tray(icon, state = tray, tooltip = "去他妈的鸡险", onAction = { visible = true }, menu = {
+                Item("打开", onClick = { visible = true })
+                Item("立即检查", enabled = !state.paused, onClick = controller::check)
+                Item(if (state.paused) "恢复检查" else "暂停检查", onClick = { controller.pause(!state.paused) })
+                Separator()
+                Item("退出", onClick = quit)
+            })
         }
-        Tray(trayIcon, state = tray, tooltip = "去他妈的鸡险", onAction = { visible = true }, menu = {
-            Item("打开", onClick = { visible = true })
-            Item("立即检查", enabled = !state.paused, onClick = controller::check)
-            Item(if (state.paused) "恢复检查" else "暂停检查", onClick = { controller.pause(!state.paused) })
-            Separator()
-            Item("退出", onClick = { controller.stop(); exitApplication() })
-        })
         // Closing the window keeps the app running in the tray / menu bar.
         Window(onCloseRequest = { visible = false }, visible = visible, title = "去他妈的鸡险", icon = icon,
             state = rememberWindowState(size = DpSize(460.dp, 760.dp), position = WindowPosition(androidx.compose.ui.Alignment.Center))) {
             CompositionLocalProvider(LocalPalette provides if (isSystemInDarkTheme()) darkPalette else lightPalette) { App(controller) }
         }
+    }
+}
+
+/**
+ * macOS menu bar item built directly on AWT: Compose's Tray draws the icon at 1x, which looks blurry on Retina.
+ * A 1x + 2x template image stays sharp and is tinted by the system like every other menu bar icon.
+ */
+@Composable private fun MacStatusItem(controller: DesktopController, paused: Boolean, show: () -> Unit, quit: () -> Unit) {
+    val pause = remember { java.awt.MenuItem() }
+    val check = remember { java.awt.MenuItem("立即检查") }
+    LaunchedEffect(paused) { pause.label = if (paused) "恢复检查" else "暂停检查"; check.isEnabled = !paused }
+    DisposableEffect(Unit) {
+        fun image(name: String) = javax.imageio.ImageIO.read(DesktopController::class.java.getResourceAsStream("/$name"))
+        val menu = java.awt.PopupMenu().apply {
+            add(java.awt.MenuItem("打开").apply { addActionListener { show() } })
+            add(check.apply { addActionListener { controller.check() } })
+            add(pause.apply { addActionListener { controller.pause(!controller.store.load().paused) } })
+            addSeparator()
+            add(java.awt.MenuItem("退出").apply { addActionListener { quit() } })
+        }
+        val item = java.awt.TrayIcon(java.awt.image.BaseMultiResolutionImage(image("tray-22.png"), image("tray-44.png")), "去他妈的鸡险", menu)
+        item.isImageAutoSize = false
+        runCatching { java.awt.SystemTray.getSystemTray().add(item) }
+        val alerts = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+            controller.alerts.collect { item.displayMessage("白名单需要处理", it, java.awt.TrayIcon.MessageType.WARNING) }
+        }
+        onDispose { alerts.cancel(); java.awt.SystemTray.getSystemTray().remove(item) }
     }
 }

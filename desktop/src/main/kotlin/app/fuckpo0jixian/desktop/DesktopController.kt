@@ -12,7 +12,10 @@ import java.util.UUID
  * Desktop counterpart of the Android controller. The desktop stays on while it runs, so instead of system wake-ups
  * it polls the local network every few seconds (no Po0 request) and applies the same 3 s / 10 min / 1 h cadence.
  */
-class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create()) {
+class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create(),
+                        /** Seams for tests; the app always uses the real network and bound sockets. */
+                        private val network: () -> DesktopLink = DesktopNetwork::read,
+                        private val transportFor: (localIp: String) -> Transport = ::BoundTransport) {
     val policy = Policy()
     private val engine = Engine(store, policy = policy)
     val busy = MutableStateFlow(false)
@@ -43,7 +46,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         var lastTick = System.currentTimeMillis()
         var lastFallback = lastTick
         while (currentCoroutineContext().isActive) {
-            val current = runCatching { withContext(Dispatchers.IO) { DesktopNetwork.read() } }.getOrNull()
+            val current = runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()
             link.value = current
             val now = System.currentTimeMillis()
             // A long gap between ticks means the computer slept; the network may have changed underneath.
@@ -55,7 +58,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                 if (current?.online == true && scheduleEnabled()) {
                     feedback.value = "网络已变化，正在检查"
                     delay(policy.debounceMs)
-                    if (runCatching { withContext(Dispatchers.IO) { DesktopNetwork.read() } }.getOrNull()?.key == lastKey) {
+                    if (runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()?.key == lastKey) {
                         launchCheck(manual = false); lastFallback = System.currentTimeMillis()
                     }
                 }
@@ -79,7 +82,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
         withContext(Dispatchers.IO) { store.save(state) }
         return try {
-            val reply = BoundTransport(l.localIp!!).execute("GET", ProbeSource.IP3322.url)
+            val reply = transportFor(l.localIp!!).execute("GET", ProbeSource.IP3322.url)
             val observed = DomesticProbe.parse(reply, now, l.key, ProbeSource.IP3322)
             withContext(Dispatchers.IO) { store.save(store.load().copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
             true
@@ -98,31 +101,31 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         try {
             val s = store.load()
             if (!credentialPresent.value) { feedback.value = statusText("NO_TOKEN"); return "NO_TOKEN" }
-            val l = withContext(Dispatchers.IO) { DesktopNetwork.read() }
+            val l = withContext(Dispatchers.IO) { network() }
             link.value = l
             if (!l.online) { feedback.value = "当前没有可用网络"; return "OFFLINE" }
             // Every request of this check leaves through this interface, whatever VPN / TUN / proxy is running.
-            val transport = BoundTransport(l.localIp!!)
+            val transport = transportFor(l.localIp!!)
             val permit = manualPreview.value
-            fun same() = runCatching { DesktopNetwork.read() }.getOrNull()?.key == l.key
+            fun same() = runCatching { network() }.getOrNull()?.key == l.key
             var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(System.currentTimeMillis()), manualPermit = permit) { same() }
             if (fallback && !manual && !observeOnly) {
                 val known = store.load().domesticExit
                 val now = System.currentTimeMillis()
-                if ((known == null || known.networkKey != l.key || now - known.time >= policy.freshnessMs) && now >= store.load().nextProbeAllowed) updateDomestic(l)
+                if ((known == null || known.networkKey != l.key || now - known.time >= policy.freshnessMs) && LocalCheck.probeAllowed(store.load(), l.key, now)) updateDomestic(l)
                 if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, l.key, System.currentTimeMillis(), policy)) return "LOCAL_UNCHANGED"
             }
             val platform = Po0Platform(vault::read, transport)
             if ((!observeOnly || previewSlot != null) && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null &&
-                !s.paused && !s.authBlocked && System.currentTimeMillis() >= s.nextAllowed) {
+                !s.paused && !s.authBlocked && (System.currentTimeMillis() >= s.nextAllowed || (manual && s.status != "HTTP_429"))) {
                 val d = store.load().domesticExit
                 val fresh = d != null && d.networkKey == l.key && System.currentTimeMillis() - d.time < policy.freshnessMs
-                if (!fresh && System.currentTimeMillis() >= store.load().nextProbeAllowed) updateDomestic(l)
+                if (!fresh && LocalCheck.probeAllowed(store.load(), l.key, System.currentTimeMillis())) updateDomestic(l)
                 val observed = store.load().domesticExit?.takeIf {
                     it.networkKey == l.key && System.currentTimeMillis() - it.time < policy.freshnessMs && store.load().probeStatus == "PROBE_OBSERVED"
                 }?.cidr
                 session = session.copy(observedCidr = observed, revalidate = {
-                    val again = withContext(Dispatchers.IO) { DesktopNetwork.read() }
+                    val again = withContext(Dispatchers.IO) { network() }
                     val exit = DomesticProbe.parse(transport.execute("GET", ProbeSource.IP3322.url), System.currentTimeMillis(), l.key, ProbeSource.IP3322)
                     again.key == l.key && exit.cidr == observed
                 })
@@ -189,7 +192,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     }
     /** Binds the router this computer is connected to right now. */
     fun bindNetwork(slot: Int, name: String) = edit(scheduleNow = true) {
-        val observation = DesktopNetwork.read().observation(System.currentTimeMillis())
+        val observation = network().observation(System.currentTimeMillis())
         require(observation != null) { "GATEWAY_UNAVAILABLE" }
         LayoutRules.bind(it, slot, observation, System.currentTimeMillis(), name, false).copy(lastSuccess = 0)
     }

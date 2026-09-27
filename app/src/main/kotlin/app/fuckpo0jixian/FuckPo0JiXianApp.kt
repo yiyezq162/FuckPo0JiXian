@@ -269,7 +269,7 @@ class Controller(private val context: Context) {
                 val now = System.currentTimeMillis()
                 val known = store.load().domesticExit
                 if ((known == null || known.networkKey != session.key || now - known.time >= policy.freshnessMs) &&
-                    now >= store.load().nextProbeAllowed) updateDomestic(n!!)
+                    LocalCheck.probeAllowed(store.load(), session.key, now)) updateDomestic(n!!)
                 if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, session.key, System.currentTimeMillis(), policy))
                     return "LOCAL_UNCHANGED"
             }
@@ -277,10 +277,10 @@ class Controller(private val context: Context) {
             // Slot writes require a recent observation on this exact Android network.
             // Never turn the domestic result into the API source IP; compare both in SlotSync.
             if ((!observeOnly || previewSlot != null) && !s.demo && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null && !s.paused && !s.authBlocked &&
-                System.currentTimeMillis() >= s.nextAllowed && session.stillCurrent()) {
+                (System.currentTimeMillis() >= s.nextAllowed || (manual && s.status != "HTTP_429")) && session.stillCurrent()) {
                 val d = store.load().domesticExit
                 val freshProbe = d != null && d.networkKey == session.key && System.currentTimeMillis() - d.time < policy.freshnessMs
-                if (!freshProbe && System.currentTimeMillis() >= store.load().nextProbeAllowed) updateDomestic(n!!)
+                if (!freshProbe && LocalCheck.probeAllowed(store.load(), session.key, System.currentTimeMillis())) updateDomestic(n!!)
                 val observed = store.load().domesticExit
                 session = session.copy(observedCidr = observed?.takeIf {
                     it.networkKey == session.key && System.currentTimeMillis() - it.time < policy.freshnessMs &&
