@@ -84,6 +84,8 @@ object LayoutRules {
             baseline = if (acknowledge) occupant else old?.baseline,
             identityId = if (changedAuthority) null else old.identityId,
             status = if (acknowledge) "AUTHORIZED_LOCAL" else old?.status ?: "UNMANAGED",
+            // Confirming takes the slot as it is now; an earlier change elsewhere no longer holds this device back.
+            changedAt = if (acknowledge) 0 else slot.changedAt,
             legacyPending = if (acknowledge) null else old?.legacyPending)
         val updated = layout.copy(version = layout.version + 1, slots = layout.slots.filterNot { it.number == slot.number } + next)
         require(updated.slots.count { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic } <= 1) { "CONFIG_MOBILE_LIMIT" }

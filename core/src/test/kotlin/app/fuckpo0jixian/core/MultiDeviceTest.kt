@@ -74,6 +74,26 @@ class MultiDeviceTest {
         assertFalse(slot(st, 0).authorized)
     }
 
+    /** Slot cleared on the Po0 website, then authorized again: fill it now, no "another device just wrote" wait. */
+    @Test fun reauthorizedEmptiedSharedSlotIsFilledRightAway() = runTest {
+        val st = MemoryStore(state(shared = true))
+        val f = Fake(snap(home, listOf(Entry(office, 1), Entry(phone, 2))))
+        check(st, f)
+        assertFalse(slot(st, 0).authorized); assertEquals(clock, slot(st, 0).changedAt)
+        st.state = LayoutRules.saveSlot(st.state, slot(st, 0), true, clock).copy(nextAllowed = 0)
+        assertEquals(0, slot(st, 0).changedAt)
+        assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(listOf(0), f.writes)
+    }
+
+    /** Even without re-confirming, an empty shared slot has no peer value to protect. */
+    @Test fun emptySharedSlotIsNotHeldByTheQuietPeriod() = runTest {
+        val l = layout(shared = true)
+        val st = MemoryStore(state(shared = true).copy(layout = l.copy(slots = l.slots.map {
+            if (it.number == 0) it.copy(baseline = null, changedAt = clock) else it })))
+        val f = Fake(snap(home, listOf(Entry(office, 1), Entry(phone, 2))))
+        assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(listOf(0), f.writes)
+    }
+
     @Test fun otherDeviceUpdatesAreLabelledAndExternalOnesWarn() = runTest {
         val st = MemoryStore(state(shared = false))
         val f = Fake(snap(home, listOf(Entry(home, 0), Entry(office, 1), Entry(Cidr("203.0.114.0/24"), 2), Entry(Cidr("203.0.115.0/24"), 3))))

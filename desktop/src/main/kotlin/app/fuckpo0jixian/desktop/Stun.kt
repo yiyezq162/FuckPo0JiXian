@@ -14,7 +14,7 @@ import java.security.SecureRandom
  * observation that cannot have gone through a proxy. Domestic servers only; names resolved the same pinned way.
  */
 internal object Stun {
-    private val servers = listOf("stun.miwifi.com", "stun.chat.bilibili.com", "stun.hitv.com")
+    private val servers = listOf("stun.chat.bilibili.com", "stun.miwifi.com", "stun.hitv.com")
     private const val COOKIE = 0x2112A442
     private val random = SecureRandom()
 

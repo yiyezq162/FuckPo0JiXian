@@ -108,7 +108,8 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
             if (occupant == before.current) return blocked("SLOT_CURRENT")
             // Another device just wrote something else here: it is probably on a different network claiming the same
             // slot. Back off rather than flip the value back and forth; a later check decides again.
-            if (target.shared && t - target.changedAt in 0 until policy.sharedQuietMs) return blocked("SHARED_RECENT")
+            // An empty slot holds nobody's value (Po0 has no delete call; a person cleared it), so there is nothing to flip.
+            if (target.shared && occupant != null && t - target.changedAt in 0 until policy.sharedQuietMs) return blocked("SHARED_RECENT")
             if (before.contains(before.current)) return blocked("COVERED_OTHER_SLOT")
             if (occupant == null && before.remaining == 0) return blocked("CAPACITY_FULL")
             live()

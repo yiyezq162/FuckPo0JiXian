@@ -7,8 +7,8 @@ android {
         applicationId = "app.fuckpo0jixian"
         minSdk = 28
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.7.5-preview"
+        versionCode = 14
+        versionName = "0.7.6-preview"
         testInstrumentationRunner = "app.fuckpo0jixian.SafeTestRunner"
     }
     buildFeatures { compose = true }
