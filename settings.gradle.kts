@@ -3,5 +3,5 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories { google(); mavenCentral() }
 }
-rootProject.name = "AllowMate"
+rootProject.name = "FuckPo0JiXian"
 include(":core", ":app")

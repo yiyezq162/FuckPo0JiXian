@@ -6,7 +6,7 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 mkdir -p module/build
 HELPER_BUILD=$(mktemp -d "$PWD/module/build/compile.XXXXXX")
 mkdir -p "$HELPER_BUILD/classes" "$HELPER_BUILD/dex"
-"$JAVA_HOME/bin/javac" -source 17 -target 17 -classpath "$SDK/platforms/android-36/android.jar" -d "$HELPER_BUILD/classes" module/src/app/allowmate/helper/Main.java module/src/app/allowmate/helper/Diagnostics.java
+"$JAVA_HOME/bin/javac" -source 17 -target 17 -classpath "$SDK/platforms/android-36/android.jar" -d "$HELPER_BUILD/classes" module/src/app/fuckpo0jixian/helper/Main.java module/src/app/fuckpo0jixian/helper/Diagnostics.java
 "$JAVA_HOME/bin/jar" --create --file "$HELPER_BUILD/helper.jar" -C "$HELPER_BUILD/classes" .
 "$SDK/build-tools/36.0.0/d8" --min-api 28 --lib "$SDK/platforms/android-36/android.jar" --output "$HELPER_BUILD/dex" "$HELPER_BUILD/helper.jar"
 MODULE_OUTPUT="$PWD/module/helper.dex.jar"

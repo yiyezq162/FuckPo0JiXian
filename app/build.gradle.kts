@@ -1,20 +1,20 @@
 plugins { id("com.android.application"); kotlin("android"); kotlin("plugin.compose") }
 android {
-    namespace = "app.allowmate"
+    namespace = "app.fuckpo0jixian"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
     defaultConfig {
-        applicationId = "app.allowmate"
+        applicationId = "app.fuckpo0jixian"
         minSdk = 28
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0-preview"
-        testInstrumentationRunner = "app.allowmate.SafeTestRunner"
+        versionCode = 7
+        versionName = "0.6.1-preview"
+        testInstrumentationRunner = "app.fuckpo0jixian.SafeTestRunner"
     }
     buildFeatures { compose = true }
     signingConfigs {
         // CI passes the published development key explicitly; local builds keep using ~/.android/debug.keystore.
-        System.getenv("ALLOWMATE_KEYSTORE")?.let { path -> getByName("debug") { storeFile = file(path) } }
+        System.getenv("FUCKPO0JIXIAN_KEYSTORE")?.let { path -> getByName("debug") { storeFile = file(path) } }
     }
     buildTypes {
         create("preview") {

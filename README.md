@@ -1,23 +1,25 @@
-# 白名单随行 · AllowMate
+# 去他妈的鸡险 · FuckPo0JiXian
 
-[![Build](https://github.com/yiyezq162/AllowMate/actions/workflows/build.yml/badge.svg)](https://github.com/yiyezq162/AllowMate/actions/workflows/build.yml)
+[![Build](https://github.com/yiyezq162/FuckPo0JiXian/actions/workflows/build.yml/badge.svg)](https://github.com/yiyezq162/FuckPo0JiXian/actions/workflows/build.yml)
 
-自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，AllowMate 会把对应的白名单槽位更新成新的 /24 网段。Android 9+，标准模式无需 root。
+自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，FuckPo0JiXian 会把对应的白名单槽位更新成新的 /24 网段。Android 9+，标准模式无需 root。
 
-> 当前源码为 **0.6.0-preview**，属于测试预发布，不是稳定正式版。
+> 当前源码为 **0.6.1-preview**，属于测试预发布，不是稳定正式版。
 
 ## 下载
 
-在 [Releases](https://github.com/yiyezq162/AllowMate/releases) 页面下载：
+在 [Releases](https://github.com/yiyezq162/FuckPo0JiXian/releases) 页面下载：
 
 | 文件 | 说明 |
 | --- | --- |
-| `AllowMate-<版本>.apk` | 推荐安装 |
-| `AllowMate-Runtime-<版本>.zip` | 可选的 Magisk / KernelSU 模块，标准模式不需要 |
-| `AllowMate-<版本>-debug.apk` | 仅供开发调试 |
+| `FuckPo0JiXian-<版本>.apk` | 推荐安装 |
+| `FuckPo0JiXian-Runtime-<版本>.zip` | 可选的 Magisk / KernelSU 模块，标准模式不需要 |
+| `FuckPo0JiXian-<版本>-debug.apk` | 仅供开发调试 |
 | `SHA256SUMS-runtime*` | 以上文件的校验和 |
 
-预览版使用同一开发证书签名，可直接覆盖安装旧版。不要为了解决签名冲突而卸载，否则会丢失本机配置。
+预览版使用同一开发证书签名，同名应用可直接覆盖升级。不要为了解决签名冲突而卸载，否则会丢失本机配置。
+
+> **从「白名单随行 / AllowMate」迁移**：0.6.1 起项目改名，应用包名由 `app.allowmate` 改为 `app.fuckpo0jixian`，安卓会把它当成另一个应用。安装后需重新添加 Token、设置槽位；确认新应用正常后，再卸载旧应用，并在 Magisk / KernelSU 中移除旧模块 `allowmate_helper`、安装新模块。
 
 ## 快速上手
 

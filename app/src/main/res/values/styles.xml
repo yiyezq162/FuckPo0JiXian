@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.AllowMate" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.FuckPo0JiXian" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">@color/window_background</item>
         <item name="android:windowLightStatusBar">true</item>

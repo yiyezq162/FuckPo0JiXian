@@ -13,9 +13,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <application android:name=".AllowMateApp" android:label="白名单随行" android:icon="@mipmap/ic_launcher"
+    <application android:name=".FuckPo0JiXianApp" android:label="去他妈的鸡险" android:icon="@mipmap/ic_launcher"
         android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
-        android:usesCleartextTraffic="false" android:supportsRtl="true" android:theme="@style/Theme.AllowMate">
+        android:usesCleartextTraffic="false" android:supportsRtl="true" android:theme="@style/Theme.FuckPo0JiXian">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

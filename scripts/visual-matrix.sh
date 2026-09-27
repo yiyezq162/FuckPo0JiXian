@@ -2,8 +2,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 ADB="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}/platform-tools/adb"
-SERIAL="${ALLOWMATE_EMULATOR_SERIAL:-emulator-5580}"
-QA_ROOT="${ALLOWMATE_QA_DIR:-docs/qa}"
+SERIAL="${FUCKPO0JIXIAN_EMULATOR_SERIAL:-emulator-5580}"
+QA_ROOT="${FUCKPO0JIXIAN_QA_DIR:-docs/qa}"
 case "$SERIAL" in emulator-*) ;; *) exit 1;; esac
 test "$("$ADB" -s "$SERIAL" shell getprop ro.kernel.qemu | tr -d '\r')" = 1
 restore() {
@@ -19,9 +19,9 @@ restore() {
 trap restore EXIT
 capture() {
   mkdir -p "$QA_ROOT/$1"
-  "$ADB" -s "$SERIAL" shell am instrument -w -e class app.allowmate.VisualTest app.allowmate.test/app.allowmate.SafeTestRunner | tee "$QA_ROOT/$1/test.txt"
+  "$ADB" -s "$SERIAL" shell am instrument -w -e class app.fuckpo0jixian.VisualTest app.fuckpo0jixian.test/app.fuckpo0jixian.SafeTestRunner | tee "$QA_ROOT/$1/test.txt"
   rg -q '^OK \(' "$QA_ROOT/$1/test.txt"
-  "$ADB" -s "$SERIAL" pull /sdcard/Android/data/app.allowmate/files/qa/. "$QA_ROOT/$1/"
+  "$ADB" -s "$SERIAL" pull /sdcard/Android/data/app.fuckpo0jixian/files/qa/. "$QA_ROOT/$1/"
 }
 "$ADB" -s "$SERIAL" shell cmd uimode night yes
 capture dark

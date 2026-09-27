@@ -1,4 +1,4 @@
-# Builds, tests and packages AllowMate on GitHub's servers.
+# Builds, tests and packages FuckPo0JiXian on GitHub's servers.
 # - Every push / pull request: run core tests + lint, build APKs and the module ZIP, keep them as a downloadable artifact.
 # - Pushing a tag like v0.5.0-preview: additionally creates a *draft* GitHub Release with those files attached.
 name: Build
@@ -46,9 +46,9 @@ jobs:
           KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE" ]; then
-            path="$RUNNER_TEMP/allowmate-debug.keystore"
+            path="$RUNNER_TEMP/fuckpo0jixian-debug.keystore"
             printf '%s' "$KEYSTORE" | base64 -d > "$path"
-            echo "ALLOWMATE_KEYSTORE=$path" >> "$GITHUB_ENV"
+            echo "FUCKPO0JIXIAN_KEYSTORE=$path" >> "$GITHUB_ENV"
             # Public certificate fingerprint only; the key itself never reaches the log.
             keytool -list -v -keystore "$path" -storepass android -alias androiddebugkey | grep 'SHA256:'
           else
@@ -70,7 +70,7 @@ jobs:
           if [ "$signer" = "$EXPECTED_SIGNER" ]; then status="✅ 与已发布版本相同，可覆盖安装"
           else status="⚠️ 与已发布版本不同，不能覆盖安装"; fi
           {
-            echo "### 白名单随行 $version"
+            echo "### 去他妈的鸡险 $version"
             echo "- 签名证书：\`$signer\`"
             echo "- $status"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -81,7 +81,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: AllowMate-${{ steps.meta.outputs.version }}-${{ github.sha }}
+          name: FuckPo0JiXian-${{ steps.meta.outputs.version }}-${{ github.sha }}
           path: dist/*
           retention-days: 30
 
@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: AllowMate-${{ needs.build.outputs.version }}-${{ github.sha }}
+          name: FuckPo0JiXian-${{ needs.build.outputs.version }}-${{ github.sha }}
           path: dist
 
       - name: Create draft release
@@ -119,4 +119,4 @@ jobs:
           flags=""
           case "$VERSION" in *preview*|*alpha*|*beta*) flags="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft $flags \
-            --title "白名单随行 $VERSION" --generate-notes
+            --title "去他妈的鸡险 $VERSION" --generate-notes

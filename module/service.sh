@@ -4,7 +4,7 @@ MODDIR=${0%/*}
 attempt=0
 while [ "$attempt" -lt 4 ]; do
   [ -d "$MODDIR" ] && [ ! -e "$MODDIR/disable" ] && [ ! -e "$MODDIR/remove" ] || exit 0
-  CLASSPATH="$MODDIR/helper.dex.jar" /system/bin/app_process /system/bin app.allowmate.helper.Main
+  CLASSPATH="$MODDIR/helper.dex.jar" /system/bin/app_process /system/bin app.fuckpo0jixian.helper.Main
   result=$?
   # A rejected duplicate instance exits normally; do not restart it repeatedly.
   [ "$result" -eq 0 ] && exit 0

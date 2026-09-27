@@ -26,9 +26,9 @@ v1 的非默认编号、未初始化和旧 pending 语义保留；固定身份�
 
 | 文件 | SHA256 |
 | --- | --- |
-| AllowMate-0.5.0-preview.apk | `a6a48c4b9dba16faac3d32b87028b32f372a95771003674b29dd2010254d5ce9` |
-| AllowMate-0.5.0-preview-debug.apk | `1dd753f0a0673ad25e26108d98babdaf19abdc04ec9c88513836d04b53a1f559` |
-| AllowMate-Runtime-0.5.0-preview.zip | `01201edcc71a3c5fe6ca471379322afbb200fab3ff71dd85562016ee0b228ee0` |
+| FuckPo0JiXian-0.5.0-preview.apk | `a6a48c4b9dba16faac3d32b87028b32f372a95771003674b29dd2010254d5ce9` |
+| FuckPo0JiXian-0.5.0-preview-debug.apk | `1dd753f0a0673ad25e26108d98babdaf19abdc04ec9c88513836d04b53a1f559` |
+| FuckPo0JiXian-Runtime-0.5.0-preview.zip | `01201edcc71a3c5fe6ca471379322afbb200fab3ff71dd85562016ee0b228ee0` |
 
 Preview 与原手机 APK 签名一致，ZIP 中绑定证书匹配；签名策略未更改。模块仅匹配 versionCode 5，没有扩展 helper 协议，未部署真机模块。
 
