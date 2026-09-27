@@ -80,8 +80,9 @@ internal fun wifiIdentityText(s: State, wifi: WifiObservation?): String? {
 @Composable internal fun CapacitySummary(s: State) {
     val snap = s.snapshot ?: return
     val colors = Apple.colors
-    val used = snap.entries.map { e -> e.slot?.let { n -> s.layout?.slots?.find { it.number == n }?.purpose } ?: SlotPurpose.RESERVED }
-        .sortedBy { it.ordinal }
+    // One cell per slot number, so the bar reads in the same order as the slot list.
+    val cells = CapacityBar.cells(snap, s.layout)
+    val used = cells.filterNotNull()
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text("已用 ${snap.entries.size} / ${snap.capacity}", style = Apple.title, color = colors.label)
@@ -89,8 +90,8 @@ internal fun wifiIdentityText(s: State, wifi: WifiObservation?): String? {
             Text("剩余 ${snap.remaining}", style = Apple.subhead, color = colors.secondary)
         }
         Row(Modifier.fillMaxWidth().height(8.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            repeat(maxOf(snap.capacity, used.size)) { i ->
-                Box(Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(used.getOrNull(i)?.let { purposeColor(it) } ?: colors.fill))
+            cells.forEach { cell ->
+                Box(Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(cell?.let { purposeColor(it) } ?: colors.fill))
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {

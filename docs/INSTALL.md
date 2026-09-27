@@ -1,6 +1,6 @@
 # 安装、升级与恢复
 
-本次产物为 0.7.6-preview，versionCode 14。应用包名为 app.fuckpo0jixian（旧名「白名单随行」为 app.allowmate，两者是不同应用，不能互相覆盖；迁移需重新添加 Token 与槽位，再卸载旧应用和旧模块）。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
+本次产物为 0.7.6-preview，versionCode 14。应用包名为 app.fuckpo0jixian。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
 
 ## 安装
 

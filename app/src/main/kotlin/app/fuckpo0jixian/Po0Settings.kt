@@ -53,10 +53,12 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     }
     item(key = "po0-devices") { DevicesSection(s, c, busy) }
     item(key = "po0-frequency") {
-        Section(header = "检查频率", footer = "网络不变时只在本机对比出口 IP，变化了才查询 Po0，以减少接口请求。系统休眠时可能延后。") {
+        Section(header = "检查频率", footer = "网络不变时只在本机比对出口，变了才查 Po0。省电时系统可能延后。") {
             ListRow("切换网络后", value = "约 3 秒")
-            ListRow("网络不变时", value = "每 10 分钟对比出口")
-            ListRow("与 Po0 核对", value = "出口变化时，至少每小时")
+            ListRow("兜底检查间隔", trailing = {
+                Stepper(s.fallbackMinutes, FallbackInterval.MIN..FallbackInterval.MAX, c::fallbackMinutes) { "$it 分钟" }
+            })
+            ListRow("与 Po0 核对", value = "至少每小时")
         }
     }
     item(key = "po0-background") { BackgroundSection() }

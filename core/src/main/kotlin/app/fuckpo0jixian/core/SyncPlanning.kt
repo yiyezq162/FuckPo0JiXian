@@ -23,17 +23,33 @@ object LocalCheck {
         now >= s.nextProbeAllowed || (s.probeStatus == "PROBE_OBSERVED" && s.domesticExit?.networkKey != networkKey)
 
     /**
+     * A fallback tick is the local comparison itself, so it always observes the exit again unless an observation
+     * on this network is only seconds old (a check just ran) or the probe is backing off after a failure.
+     * Freshness alone is not enough: with a 2-minute interval the previous tick's result would still count as
+     * fresh and the exit would never be compared.
+     */
+    fun fallbackProbe(s: State, networkKey: String, now: Long, policy: Policy = Policy()): Boolean {
+        val known = s.domesticExit
+        val recent = known != null && known.networkKey == networkKey && s.probeStatus == "PROBE_OBSERVED" &&
+            now - known.time in 0 until policy.probeIntervalMs
+        return !recent && probeAllowed(s, networkKey, now)
+    }
+
+    /**
      * Fallback runs may skip Po0 when the domestic exit just observed on this network matches the exit Po0
      * reported at the last successful check on the same network. Any doubt means a full remote check.
-     * Configuration edits reset lastSuccess, so they always reach Po0.
+     * When no fresh local observation exists (the probe failed or is backing off), Po0 is asked at the default
+     * cadence ([Policy.fallbackMinutes]) instead of on every tick, so a short interval never turns a broken probe
+     * into a Po0 request every few minutes. Configuration edits reset lastSuccess, so they always reach Po0.
      */
     fun canSkipRemote(s: State, exit: DomesticExit?, networkKey: String?, now: Long, policy: Policy = Policy()): Boolean {
         val snapshot = s.snapshot ?: return false
-        return exit != null && networkKey != null && !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null &&
+        val settledHere = networkKey != null && !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null &&
             s.failures == 0 && s.layout?.pending == null && s.status in settled &&
-            s.lastSuccess > 0 && now - s.lastSuccess in 0 until policy.remoteRefreshMs &&
-            s.networkKey == networkKey && exit.networkKey == networkKey && now - exit.time in 0 until policy.freshnessMs &&
-            exit.cidr == snapshot.current
+            s.lastSuccess > 0 && now - s.lastSuccess in 0 until policy.remoteRefreshMs && s.networkKey == networkKey
+        if (!settledHere) return false
+        val observed = exit != null && exit.networkKey == networkKey && now - exit.time in 0 until policy.freshnessMs
+        return if (observed) exit!!.cidr == snapshot.current else now - s.lastSuccess < policy.fallbackMinutes * 60_000
     }
 }
 

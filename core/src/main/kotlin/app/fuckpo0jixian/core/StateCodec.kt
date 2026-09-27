@@ -16,7 +16,7 @@ object StateCodec {
         put("version", 2); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
         put("accountContext", s.accountContext); put("globalBlock", s.globalBlock)
         put("layout", s.layout?.let(LayoutCodec::encode) ?: JsonNull)
-        put("runtimeMode", s.runtimeMode.name); put("deviceName", s.deviceName)
+        put("runtimeMode", s.runtimeMode.name); put("deviceName", s.deviceName); put("fallbackMinutes", s.fallbackMinutes)
         put("fixed", s.budget.fixed); put("mobile", s.budget.mobile)
         put("lastCheck", s.lastCheck); put("lastSuccess", s.lastSuccess); put("nextAllowed", s.nextAllowed)
         put("failures", s.failures); put("authBlocked", s.authBlocked); put("networkKey", s.networkKey); put("status", s.status)
@@ -64,7 +64,9 @@ object StateCodec {
             }, o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD,
             o["layout"]?.takeUnless { it is JsonNull }?.jsonObject?.let(LayoutCodec::decode),
             o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"),
-            o.optional("deviceName") ?: "")
+            o.optional("deviceName") ?: "",
+            // Absent before 0.8: the default cadence.
+            FallbackInterval.clamp(o.optional("fallbackMinutes")?.toIntOrNull() ?: FallbackInterval.DEFAULT))
         return if (o.l("version") == 1L) LayoutRules.migrate(state) else state
     }
 }

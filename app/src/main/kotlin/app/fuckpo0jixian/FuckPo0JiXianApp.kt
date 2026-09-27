@@ -73,12 +73,13 @@ class Controller(private val context: Context) {
         refreshSchedule()
         // An app update finishes cancelling the old install's PendingIntents a few seconds after the new
         // process starts, taking the fresh network wake with it (seen on device). Re-arm once afterwards.
-        scope.launch { delay(30_000); if (scheduleEnabled()) Wake.enable(context, policy.fallbackMinutes) }
+        scope.launch { delay(30_000); if (scheduleEnabled()) Wake.enable(context, fallbackMs()) }
         try { cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
-            // A new local IPv4 (e.g. mobile data re-attach) usually means a new public exit.
+            // A new local address on the same network (mobile data re-attach, a new IPv6 prefix) usually means a new
+            // public exit. changed() only reacts when the address key moves, so DNS or route updates cost nothing.
             override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) = changed()
         }) } catch (_: Exception) { feedback.value = "无法监听网络变化，请手动检查" }
     }
@@ -100,7 +101,7 @@ class Controller(private val context: Context) {
         currentNetworkKey.value = networkKey(cm.activeNetwork)
         wifiObservation.value = if (store.load().demo) demoWifi() else wifiObserver.latest
         val identity = wifiObserver.latest
-        val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localIpv4(n)}")
+        val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localAddresses(n)}")
         if (!stability.changed(id, SystemClock.elapsedRealtime())) return@launch
         // Credential- and identity-free timing evidence: network type and the same clock as FuckPo0JiXianCheck.
         val type = cm.getNetworkCapabilities(n)?.let { c -> when {
@@ -117,8 +118,20 @@ class Controller(private val context: Context) {
         wm.cancelUniqueWork("catch-up")
         if (n != null) scheduleCheck("network-check")
     } }
-    private fun localIpv4(n: Network?) = n?.let { cm.getLinkProperties(it) }?.linkAddresses
-        ?.mapNotNull { (it.address as? java.net.Inet4Address)?.hostAddress }?.sorted()?.joinToString(",")
+    /**
+     * What identifies this network's addressing: its IPv4 addresses, or on IPv6-only mobile data (464XLAT, whose
+     * IPv4 is a fixed 192.0.0.x on a stacked link) its global /64 prefixes. Prefixes, not addresses, so privacy
+     * address rotation within a prefix does not trigger checks.
+     */
+    private fun localAddresses(n: Network?): String? {
+        val addresses = n?.let { cm.getLinkProperties(it) }?.linkAddresses?.map { it.address } ?: return null
+        val v4 = addresses.mapNotNull { (it as? java.net.Inet4Address)?.hostAddress }.sorted()
+        if (v4.isNotEmpty()) return v4.joinToString(",")
+        return addresses.filterIsInstance<java.net.Inet6Address>().filter { !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isLoopbackAddress }
+            .map { it.address.take(8).joinToString("") { b -> "%02x".format(b) } }.distinct().sorted().joinToString(",")
+    }
+    /** This device's fallback interval (2–59 minutes, 10 by default). */
+    private fun fallbackMs() = store.load().fallbackMs
     private fun scheduleCheck(name: String, minimumDelay: Long = 0) {
         if (!vault.exists() || physical() == null) return
         val planned = SyncPlanning.delayMs(store.load(), System.currentTimeMillis(), stability.remaining(SystemClock.elapsedRealtime())) ?: return
@@ -135,10 +148,11 @@ class Controller(private val context: Context) {
             wm.cancelUniqueWork("fallback"); wm.cancelUniqueWork("fallback-now"); wm.cancelUniqueWork("network-check"); wm.cancelUniqueWork("catch-up")
             Wake.disable(context)
         } else {
-            // Alarm chain gives the 10-minute cadence; WorkManager (15-minute floor) is the durable backstop.
-            Wake.enable(context, policy.fallbackMinutes)
+            // Alarm chain gives the configured cadence (Doze stretches it to ~9 minutes at best); WorkManager, whose
+            // period cannot go below 15 minutes, is the durable backstop.
+            Wake.enable(context, fallbackMs())
             wm.enqueueUniquePeriodicWork("fallback", ExistingPeriodicWorkPolicy.UPDATE,
-                PeriodicWorkRequestBuilder<CheckWorker>(maxOf(15, policy.fallbackMinutes), TimeUnit.MINUTES)
+                PeriodicWorkRequestBuilder<CheckWorker>(maxOf(15L, fallbackMs() / 60_000), TimeUnit.MINUTES)
                     .setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
         }
@@ -146,7 +160,7 @@ class Controller(private val context: Context) {
     /** Fallback alarm: re-arm first so a failed check never breaks the chain, then run a cheap local comparison. */
     fun fallbackTick() {
         if (!scheduleEnabled()) { Wake.disable(context); return }
-        Wake.enable(context, policy.fallbackMinutes)
+        Wake.enable(context, fallbackMs())
         WorkManager.getInstance(context).enqueueUniqueWork("fallback-now", ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<CheckWorker>().setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
@@ -229,7 +243,7 @@ class Controller(private val context: Context) {
         android.util.Log.i("FuckPo0JiXianCheck", "uid=${android.os.Process.myUid()} mode=$selected path=$path " +
             "beginMs=$began endMs=${SystemClock.elapsedRealtime()} httpAttempts=$count result=$safeCode")
         // The network has settled by now: arm the one-shot wake for the next change and restart the fallback clock.
-        if (result != "BUSY" && result != "CANCELLED_NETWORK_OR_SETTINGS" && scheduleEnabled()) Wake.enable(context, policy.fallbackMinutes)
+        if (result != "BUSY" && result != "CANCELLED_NETWORK_OR_SETTINGS" && scheduleEnabled()) Wake.enable(context, fallbackMs())
         result
     }
     private suspend fun runCheckOnMain(manual: Boolean, observeOnly: Boolean, enhanced: Boolean, fallback: Boolean): String {
@@ -266,10 +280,7 @@ class Controller(private val context: Context) {
             }
             if (fallback && !manual && !observeOnly && !s.demo) {
                 // Same network as last time: compare the exit locally and leave Po0 alone unless it changed.
-                val now = System.currentTimeMillis()
-                val known = store.load().domesticExit
-                if ((known == null || known.networkKey != session.key || now - known.time >= policy.freshnessMs) &&
-                    LocalCheck.probeAllowed(store.load(), session.key, now)) updateDomestic(n!!)
+                if (LocalCheck.fallbackProbe(store.load(), session.key, System.currentTimeMillis(), policy)) updateDomestic(n!!)
                 if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, session.key, System.currentTimeMillis(), policy))
                     return "LOCAL_UNCHANGED"
             }
@@ -351,6 +362,8 @@ class Controller(private val context: Context) {
     fun pause(value: Boolean) = edit(scheduleNow = !value) { it.copy(paused = value) }
     fun runtimeMode(value: RuntimeMode) = edit { it.copy(runtimeMode = value) }
     fun deviceName(value: String) = edit { it.copy(deviceName = value.trim().take(24)) }
+    /** edit() re-arms the alarm and the periodic work with the new interval. */
+    fun fallbackMinutes(value: Int) = edit { it.copy(fallbackMinutes = FallbackInterval.clamp(value)) }
     /** Labels the slots another device manages; local authority and Po0 are untouched. */
     fun importPeers(peer: PeerLayout) {
         var count = 0
@@ -410,12 +423,14 @@ class Controller(private val context: Context) {
         // Keep real and simulated credentials separate; discard network/account associations on switching.
         demo = SlotDemoPlatform()
         val base = State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
-            nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName)
+            nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
+            fallbackMinutes = it.fallbackMinutes)
         if (enabled) demoState(base) else base
     }
     fun saveToken(value: String) = edit {
         val sameAccount = vault.read() == value.trim()
-        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName))
+        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
+            fallbackMinutes = it.fallbackMinutes))
         vault.save(value.trim())
         credentialPresent.value = true
         it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = null, ownership = emptyList(), profiles = emptyList(), activeProfileId = null,
@@ -423,7 +438,7 @@ class Controller(private val context: Context) {
             accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
             globalBlock = if (sameAccount) it.globalBlock else null, budget = Budget(), status = "TOKEN_SAVED")
     }
-    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
+    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
     fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
     private fun demoWifi(): WifiObservation? = when (demoScenario) {
         0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())

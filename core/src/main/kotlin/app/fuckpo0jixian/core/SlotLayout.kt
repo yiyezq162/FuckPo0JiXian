@@ -142,3 +142,22 @@ object SlotSelection {
         return TargetDecision(layout.slots.singleOrNull { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic }, "MOBILE_MATCH")
     }
 }
+
+/**
+ * The capacity bar, one cell per quota: cells follow slot numbers so slot 2 always sits second, whatever the
+ * purposes. A cell holds the purpose of the slot occupying it, or null when empty. Entries without a slot number
+ * use quota too; they take the last empty cells, drawn as RESERVED (gray).
+ */
+object CapacityBar {
+    fun cells(snap: Snapshot, layout: SlotLayout?): List<SlotPurpose?> {
+        val cells = MutableList(snap.capacity) { n ->
+            if (snap.entries.any { it.slot == n }) layout?.slots?.find { it.number == n }?.purpose ?: SlotPurpose.RESERVED else null
+        }
+        var unassigned = snap.entries.count { it.slot == null || it.slot !in 0 until snap.capacity }
+        for (i in cells.indices.reversed()) {
+            if (unassigned == 0) break
+            if (cells[i] == null) { cells[i] = SlotPurpose.RESERVED; unassigned-- }
+        }
+        return cells
+    }
+}

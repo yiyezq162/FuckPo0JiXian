@@ -23,8 +23,8 @@ class WakeTest {
 
     @Test fun fallbackAlarmAndNetworkWakeRegisterOnceAndClear() {
         try {
-            Wake.enable(context, 10)
-            Wake.enable(context, 10) // re-arming must replace, not stack
+            Wake.enable(context, 600_000)
+            Wake.enable(context, 600_000) // re-arming must replace, not stack
             assertEquals(1, fallbackAlarms())
             assertEquals(1, networkListens())
             Thread.sleep(15_000) // must persist, not just exist right after registering
@@ -39,7 +39,7 @@ class WakeTest {
     @Test fun fallbackTickWithoutCredentialDisarmsInsteadOfChecking() {
         val controller = (context.applicationContext as FuckPo0JiXianApp).controller
         org.junit.Assume.assumeFalse("needs an emulator without a saved token", controller.vault.exists())
-        Wake.enable(context, 10)
+        Wake.enable(context, 600_000)
         instrumentation.runOnMainSync { controller.fallbackTick() }
         assertEquals(0, fallbackAlarms())
         assertEquals(0, networkListens())

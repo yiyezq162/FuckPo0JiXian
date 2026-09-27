@@ -10,17 +10,19 @@ import java.util.UUID
 
 /**
  * Desktop counterpart of the Android controller. The desktop stays on while it runs, so instead of system wake-ups
- * it polls the local network every few seconds (no Po0 request) and applies the same 3 s / 10 min / 1 h cadence.
+ * it polls the local network every few seconds (no Po0 request) and applies the same 3 s / fallback / 1 h cadence;
+ * the fallback interval is the device's own setting (2–59 minutes, 10 by default).
  */
 class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create(),
                         /** Seams for tests; the app always uses the real network and bound sockets. */
                         private val network: () -> DesktopLink = DesktopNetwork::read,
                         /** Public IPv4 seen directly from the LAN interface, or null to fall back to the HTTPS probe. */
                         private val stun: (localIp: String) -> String? = Stun::query,
+                        private val now: () -> Long = System::currentTimeMillis,
                         /** tunnel = true only for Po0: see BoundTransport. The exit probe is always direct. */
                         private val transportFor: (localIp: String, tunnel: Boolean) -> Transport = ::BoundTransport) {
     val policy = Policy()
-    private val engine = Engine(store, policy = policy)
+    private val engine = Engine(store, now, policy)
     val busy = MutableStateFlow(false)
     val feedback = MutableStateFlow("")
     val link = MutableStateFlow<DesktopLink?>(null)
@@ -46,15 +48,15 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
 
     private suspend fun monitor() {
         var lastKey: String? = null
-        var lastTick = System.currentTimeMillis()
+        var lastTick = now()
         var lastFallback = lastTick
         while (currentCoroutineContext().isActive) {
             val current = runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()
             link.value = current
-            val now = System.currentTimeMillis()
+            val t = now()
             // A long gap between ticks means the computer slept; the network may have changed underneath.
-            val woke = now - lastTick > 60_000
-            lastTick = now
+            val woke = t - lastTick > 60_000
+            lastTick = t
             if (current?.key != lastKey || woke) {
                 lastKey = current?.key
                 manualPreview.value = null
@@ -62,11 +64,11 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                     feedback.value = "网络已变化，正在检查"
                     delay(policy.debounceMs)
                     if (runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()?.key == lastKey) {
-                        launchCheck(manual = false); lastFallback = System.currentTimeMillis()
+                        launchCheck(manual = false); lastFallback = now()
                     }
                 }
-            } else if (now - lastFallback >= policy.fallbackMinutes * 60_000 && current?.online == true && scheduleEnabled()) {
-                lastFallback = now
+            } else if (t - lastFallback >= store.load().fallbackMs && current?.online == true && scheduleEnabled()) {
+                lastFallback = t
                 launchCheck(manual = false, fallback = true)
             }
             delay(5_000)
@@ -81,18 +83,18 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     fun checkConnection() = launchCheck(manual = true, observeOnly = true)
 
     private suspend fun updateDomestic(l: DesktopLink): Boolean {
-        val now = System.currentTimeMillis()
-        val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
+        val t = now()
+        val state = store.load().copy(nextProbeAllowed = t + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
         withContext(Dispatchers.IO) { store.save(state) }
         return try {
-            val observed = observeExit(l, now)
+            val observed = observeExit(l, t)
             withContext(Dispatchers.IO) { store.save(store.load().copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
             true
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             val wait = maxOf(60_000, (e as? ApiFailure)?.retryAfterMs ?: 0)
             withContext(Dispatchers.IO) { store.save(store.load().copy(probeStatus = (e as? ApiFailure)?.code ?: "PROBE_FAILED",
-                nextProbeAllowed = if (Long.MAX_VALUE - now < wait) Long.MAX_VALUE else now + wait)) }
+                nextProbeAllowed = if (Long.MAX_VALUE - t < wait) Long.MAX_VALUE else t + wait)) }
             false
         }
     }
@@ -116,25 +118,26 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             val transport = transportFor(l.localIp!!, true)
             val permit = manualPreview.value
             fun same() = runCatching { network() }.getOrNull()?.key == l.key
-            var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(System.currentTimeMillis()), manualPermit = permit) { same() }
+            var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(now()), manualPermit = permit) { same() }
             if (fallback && !manual && !observeOnly) {
-                val known = store.load().domesticExit
-                val now = System.currentTimeMillis()
-                if ((known == null || known.networkKey != l.key || now - known.time >= policy.freshnessMs) && LocalCheck.probeAllowed(store.load(), l.key, now)) updateDomestic(l)
-                if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, l.key, System.currentTimeMillis(), policy)) return "LOCAL_UNCHANGED"
+                // Every tick compares the exit again; Po0 only hears about it when something moved.
+                if (LocalCheck.fallbackProbe(store.load(), l.key, now(), policy)) updateDomestic(l)
+                if (LocalCheck.canSkipRemote(store.load(), store.load().domesticExit, l.key, now(), policy)) {
+                    feedback.value = statusText("LOCAL_UNCHANGED"); return "LOCAL_UNCHANGED"
+                }
             }
             val platform = Po0Platform(vault::read, transport)
             if ((!observeOnly || previewSlot != null) && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null &&
-                !s.paused && !s.authBlocked && (System.currentTimeMillis() >= s.nextAllowed || (manual && s.status != "HTTP_429"))) {
+                !s.paused && !s.authBlocked && (now() >= s.nextAllowed || (manual && s.status != "HTTP_429"))) {
                 val d = store.load().domesticExit
-                val fresh = d != null && d.networkKey == l.key && System.currentTimeMillis() - d.time < policy.freshnessMs
-                if (!fresh && LocalCheck.probeAllowed(store.load(), l.key, System.currentTimeMillis())) updateDomestic(l)
+                val fresh = d != null && d.networkKey == l.key && now() - d.time < policy.freshnessMs
+                if (!fresh && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
                 val observed = store.load().domesticExit?.takeIf {
-                    it.networkKey == l.key && System.currentTimeMillis() - it.time < policy.freshnessMs && store.load().probeStatus == "PROBE_OBSERVED"
+                    it.networkKey == l.key && now() - it.time < policy.freshnessMs && store.load().probeStatus == "PROBE_OBSERVED"
                 }?.cidr
                 session = session.copy(observedCidr = observed, revalidate = {
                     val again = withContext(Dispatchers.IO) { network() }
-                    val exit = observeExit(l, System.currentTimeMillis())
+                    val exit = observeExit(l, now())
                     again.key == l.key && exit.cidr == observed
                 })
             }
@@ -146,11 +149,11 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                 if (code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING") && !after.paused && slot?.purpose == SlotPurpose.FIXED &&
                     slot.writer == Writer.LOCAL && slot.authorized && session.observedCidr == after.snapshot?.current && same()) {
                     manualPreview.value = ManualPermit(after.accountContext, after.layout!!.version, number, l.key, session.wifi,
-                        after.snapshot!!, System.currentTimeMillis() + 180_000)
+                        after.snapshot!!, now() + 180_000)
                 } else feedback.value = "无法预览：请确认已恢复检查、此槽已授权且出口未变"
             }
-            if (!after.paused && after.lastCheck > s.lastCheck && System.currentTimeMillis() >= after.nextProbeAllowed &&
-                (manual || after.domesticExit?.networkKey != l.key || System.currentTimeMillis() - (after.domesticExit?.time ?: 0) >= policy.cacheMs)) {
+            if (!after.paused && after.lastCheck > s.lastCheck && now() >= after.nextProbeAllowed &&
+                (manual || after.domesticExit?.networkKey != l.key || now() - (after.domesticExit?.time ?: 0) >= policy.cacheMs)) {
                 updateDomestic(l)
             }
             feedback.value = statusText(code)
@@ -175,7 +178,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     private fun scheduleFollowUp() {
         followUp?.cancel()
         followUp = scope.launch {
-            delay(maxOf(policy.debounceMs, store.load().nextAllowed - System.currentTimeMillis()))
+            delay(maxOf(policy.debounceMs, store.load().nextAllowed - now()))
             if (scheduleEnabled()) launchCheck(manual = false)
         }
     }
@@ -195,14 +198,16 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     fun pause(value: Boolean) = edit(scheduleNow = !value) { it.copy(paused = value) }
     fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
     fun deviceName(value: String) = edit { it.copy(deviceName = value.trim().take(24)) }
+    /** Takes effect at the next monitor tick; the hourly Po0 refresh is not adjustable. */
+    fun fallbackMinutes(value: Int) = edit { it.copy(fallbackMinutes = FallbackInterval.clamp(value)) }
     fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit(scheduleNow = true) {
-        LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
+        LayoutRules.saveSlot(it, slot, acknowledged, now())
     }
     /** Binds the router this computer is connected to right now. */
     fun bindNetwork(slot: Int, name: String) = edit(scheduleNow = true) {
-        val observation = network().observation(System.currentTimeMillis())
+        val observation = network().observation(now())
         require(observation != null) { "GATEWAY_UNAVAILABLE" }
-        LayoutRules.bind(it, slot, observation, System.currentTimeMillis(), name, false).copy(lastSuccess = 0)
+        LayoutRules.bind(it, slot, observation, now(), name, false).copy(lastSuccess = 0)
     }
     fun revokeNetwork(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
     fun importPeers(peer: PeerLayout) {
@@ -211,7 +216,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             PeerImport.apply(it, peer).also { r -> count = r.changed.size }.state
         }
     }
-    fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, System.currentTimeMillis(), BoundTransport.trace())
+    fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, now(), BoundTransport.trace())
     fun saveToken(value: String) = edit {
         val sameAccount = runCatching { vault.read() }.getOrNull() == value.trim()
         vault.save(value.trim())
@@ -222,7 +227,8 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     }
     fun clearToken() = edit {
         vault.clear(); credentialPresent.value = false
-        State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName)
+        State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName,
+            fallbackMinutes = it.fallbackMinutes)
     }
     fun previewManual(number: Int) {
         if (busy.value || operation?.isActive == true) return
@@ -238,7 +244,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         if (operation?.isActive == true) return
         operation = scope.launch {
             feedback.value = "已确认，即将更新"
-            delay((store.load().nextAllowed - System.currentTimeMillis()).coerceAtLeast(0))
+            delay((store.load().nextAllowed - now()).coerceAtLeast(0))
             if (manualPreview.value == permit) runCheck(true)
             manualPreview.value = null
         }

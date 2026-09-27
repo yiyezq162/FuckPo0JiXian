@@ -20,10 +20,6 @@
 | `FuckPo0JiXian-Desktop-<版本>-windows-x64.msi` / `.exe` | Windows 桌面端，二选一 |
 | `SHA256SUMS-desktop-*` | 桌面端校验和 |
 
-预览版使用同一开发证书签名，同名应用可直接覆盖升级。不要为了解决签名冲突而卸载，否则会丢失本机配置。
-
-> **从「白名单随行 / AllowMate」迁移**：0.6.1 起项目改名，应用包名由 `app.allowmate` 改为 `app.fuckpo0jixian`，安卓会把它当成另一个应用。安装后需重新添加 Token、设置槽位；确认新应用正常后，再卸载旧应用，并在 Magisk / KernelSU 中移除旧模块 `allowmate_helper`、安装新模块。
-
 ## 快速上手
 
 1. **设置** → 添加 Token（或粘贴官方接口链接）→ 检查连接。首次默认暂停且只读。

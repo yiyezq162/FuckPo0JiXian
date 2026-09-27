@@ -31,6 +31,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -302,5 +307,43 @@ class AlertAction(val text: String, val destructive: Boolean = false, val prefer
         Text(shown, style = Apple.subhead, color = c.label, textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 24.dp).shadow(12.dp, RoundedCornerShape(22.dp))
                 .background(c.card, RoundedCornerShape(22.dp)).padding(horizontal = 18.dp, vertical = 11.dp))
+    }
+}
+
+/**
+ * iOS-style − / + stepper. Holding a button repeats; the value is committed once the taps stop, so a long run of
+ * steps saves (and reschedules) only once.
+ */
+@Composable fun Stepper(value: Int, range: IntRange, onChange: (Int) -> Unit, label: (Int) -> String = { "$it" }) {
+    val c = Apple.colors
+    var draft by remember(value) { mutableIntStateOf(value) }
+    val commit by rememberUpdatedState(onChange)
+    LaunchedEffect(draft) { if (draft != value) { delay(700); commit(draft) } }
+    @Composable fun Button(text: String, step: Int) {
+        val enabled = draft + step in range
+        Box(Modifier.size(44.dp, 32.dp).alpha(if (enabled) 1f else 0.35f)
+            .semantics { contentDescription = if (step > 0) "增加" else "减少" }
+            .pointerInput(step) {
+                detectTapGestures(onPress = {
+                    coroutineScope {
+                        val repeat = launch {
+                            draft = (draft + step).coerceIn(range)
+                            delay(420)
+                            while (true) { draft = (draft + step).coerceIn(range); delay(70) }
+                        }
+                        tryAwaitRelease(); repeat.cancel()
+                    }
+                })
+            }, contentAlignment = Alignment.Center) {
+            Text(text, style = Apple.title, color = c.label)
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label(draft), style = Apple.body, color = c.secondary)
+        Row(Modifier.clip(RoundedCornerShape(9.dp)).background(c.fill), verticalAlignment = Alignment.CenterVertically) {
+            Button("−", -1)
+            Box(Modifier.size(0.5.dp, 18.dp).background(c.separator))
+            Button("+", 1)
+        }
     }
 }

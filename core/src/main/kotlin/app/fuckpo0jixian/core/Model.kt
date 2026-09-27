@@ -31,9 +31,11 @@ data class Budget(val fixed: Int = 0, val mobile: Int = 0) : Serializable {
 }
 /**
  * Po0 publishes no rate limit, so timing follows its official scripts: react to network changes within
- * seconds and fall back every 10 minutes. [minIntervalMs] only stops automatic retry loops; manual checks
- * skip it. Fallback runs compare the exit locally and query Po0 only when something may have changed, or
- * at least every [remoteRefreshMs] to notice edits made by other devices.
+ * seconds and fall back every 10 minutes (each device may pick 2–59, see [State.fallbackMinutes]).
+ * [minIntervalMs] only stops automatic retry loops; manual checks skip it. Fallback runs compare the exit
+ * locally and query Po0 only when something may have changed, or at least every [remoteRefreshMs] to notice
+ * edits made by other devices. When the exit cannot be compared locally, Po0 is asked instead, but no more
+ * often than every [fallbackMinutes], whatever interval the device picked.
  */
 data class Policy(val debounceMs: Long = 3_000, val minIntervalMs: Long = 10_000,
                   val cacheMs: Long = 900_000, val fallbackMinutes: Long = 10,
@@ -66,8 +68,20 @@ data class State(
     val accountContext: String = java.util.UUID.randomUUID().toString(),
     val globalBlock: String? = null,
     /** How this device labels itself in exports and on other devices; display only. */
-    val deviceName: String = ""
-) : Serializable
+    val deviceName: String = "",
+    /** Minutes between local exit comparisons while the network stays the same; this device only. */
+    val fallbackMinutes: Int = FallbackInterval.DEFAULT
+) : Serializable {
+    /** The setting as schedulers use it, always inside the allowed range. */
+    val fallbackMs: Long get() = FallbackInterval.clamp(fallbackMinutes) * 60_000L
+}
+
+object FallbackInterval {
+    const val MIN = 2
+    const val MAX = 59
+    const val DEFAULT = 10
+    fun clamp(minutes: Int) = minutes.coerceIn(MIN, MAX)
+}
 
 object Allocation {
     fun protected(s: State, cidr: Cidr): Boolean {

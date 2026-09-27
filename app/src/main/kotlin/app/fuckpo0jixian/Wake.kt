@@ -13,7 +13,8 @@ import android.os.SystemClock
 /**
  * Wake paths that need no root and survive process death (not force-stop):
  * - a PendingIntent network registration, which the system fires when a new network becomes available;
- * - an allow-while-idle alarm chain for the fallback, which Doze lets through at most every ~9 minutes.
+ * - an allow-while-idle alarm chain for the fallback at the configured interval (2–59 minutes), which Doze
+ *   lets through at most every ~9 minutes.
  * Starting the process is enough for network wakes: Controller.start() re-registers the live callback,
  * which reports the current network and schedules the usual debounced check.
  */
@@ -32,9 +33,9 @@ object Wake {
      * arrives while the process is alive is ignored, so it can never loop. Re-registering the same
      * PendingIntent replaces the previous request; package updates cancel it, hence the repeated arming.
      */
-    fun enable(context: Context, fallbackMinutes: Long) {
+    fun enable(context: Context, fallbackMs: Long) {
         armNetwork(context)
-        scheduleFallback(context, fallbackMinutes)
+        scheduleFallback(context, fallbackMs)
     }
 
     private fun armNetwork(context: Context) {
@@ -54,9 +55,9 @@ object Wake {
     }
 
 
-    fun scheduleFallback(context: Context, minutes: Long) {
+    fun scheduleFallback(context: Context, delayMs: Long) {
         context.getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + minutes * 60_000, operation(context, ACTION_FALLBACK))
+            SystemClock.elapsedRealtime() + delayMs, operation(context, ACTION_FALLBACK))
     }
 
     fun disable(context: Context) {

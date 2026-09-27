@@ -22,6 +22,7 @@ object RedactedExport {
             put("status", s.status); put("failures", s.failures); put("authBlocked", s.authBlocked); put("globalBlock", s.globalBlock)
             put("lastCheck", time(s.lastCheck)); put("lastSuccess", time(s.lastSuccess))
             put("pendingWrite", s.layout?.pending != null)
+            put("fallbackMinutes", FallbackInterval.clamp(s.fallbackMinutes))
         }
         s.snapshot?.let { snap -> putJsonObject("whitelist") {
             put("capacity", snap.capacity); put("current", snap.current.masked)

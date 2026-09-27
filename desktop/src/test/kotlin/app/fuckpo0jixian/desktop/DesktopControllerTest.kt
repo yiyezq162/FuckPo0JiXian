@@ -29,10 +29,10 @@ class DesktopControllerTest {
     /** What STUN reports; null means STUN is unavailable and the HTTPS probe is used. */
     private var stunExit: (() -> String?)? = null
 
-    private fun setup(internet: FakeInternet, link: () -> DesktopLink): DesktopController {
+    private fun setup(internet: FakeInternet, clock: () -> Long = System::currentTimeMillis, link: () -> DesktopLink): DesktopController {
         val dir = Files.createTempDirectory("fpjx")
         val vault = FileVault(dir.resolve("t")).apply { save("pgnfw_CONTROLLER_TEST") }
-        val c = DesktopController(FileStore(dir), vault, link, stun = { stunExit?.invoke() }) { _, _ -> internet }
+        val c = DesktopController(FileStore(dir), vault, link, stun = { stunExit?.invoke() }, now = clock) { _, _ -> internet }
         c.store.save(State(mode = Mode.AUTO, paused = false, accountContext = "acct", deviceName = "Mac",
             snapshot = Snapshot(Cidr("198.51.100.0/24"), listOf(Entry(Cidr("198.51.100.0/24"), 0)), 5),
             layout = SlotLayout(slots = listOf(
@@ -104,6 +104,29 @@ class DesktopControllerTest {
         c.vault.clear(); c.credentialPresent.value = false
         assertEquals("NO_TOKEN", c.runCheck(manual = true))
         assertTrue(internet.calls.isEmpty())
+    }
+
+    /** Shortest interval: STUN compares the exit on every 2-minute tick, Po0 is only asked once it moved. */
+    @Test fun twoMinuteFallbackComparesEveryTickWithoutAskingPo0() = runBlocking {
+        var clock = 1_800_000_000_000L
+        val internet = FakeInternet("198.51.100.9", mutableMapOf(0 to "198.51.100.0/24"))
+        var stunCalls = 0
+        stunExit = { stunCalls++; internet.exit }
+        val c = setup(internet, { clock }) { home }
+        c.store.save(c.store.load().copy(fallbackMinutes = 2))
+        assertEquals("SLOT_CURRENT", c.runCheck(manual = true))
+        val po0 = internet.calls.size
+        val stun = stunCalls
+        repeat(29) {
+            clock += c.store.load().fallbackMs
+            assertEquals("LOCAL_UNCHANGED", c.runCheck(manual = false, fallback = true))
+        }
+        assertEquals(po0, internet.calls.size, "no Po0 request while the exit stays put")
+        assertEquals(stun + 29, stunCalls, "one STUN comparison per tick")
+        clock += c.store.load().fallbackMs; internet.exit = "203.0.113.9"
+        assertEquals("SLOT_UPDATED", c.runCheck(manual = false, fallback = true))
+        assertEquals("203.0.113.0/24", internet.entries[0])
+        assertTrue("\"fallbackMinutes\": 2" in c.exportText())
     }
 
     @Test fun exportNeverContainsTheRouter() {

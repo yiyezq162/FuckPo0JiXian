@@ -134,7 +134,7 @@ private fun matchedName(s: State, link: DesktopLink?): String? {
 }
 
 @Composable private fun Capacity(s: State, snap: Snapshot) {
-    val used = snap.entries.map { e -> e.slot?.let { n -> s.layout?.slots?.find { it.number == n }?.purpose } ?: SlotPurpose.RESERVED }.sortedBy { it.ordinal }
+    val cells = CapacityBar.cells(snap, s.layout)
     Section {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
@@ -143,8 +143,8 @@ private fun matchedName(s: State, link: DesktopLink?): String? {
                 Text("剩余 ${snap.remaining}", style = Type.footnote, color = colors.secondary)
             }
             Row(Modifier.fillMaxWidth().height(7.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                repeat(maxOf(snap.capacity, used.size)) { i ->
-                    Box(Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(used.getOrNull(i)?.let { purposeColor(it) } ?: colors.fill))
+                cells.forEach { cell ->
+                    Box(Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(cell?.let { purposeColor(it) } ?: colors.fill))
                 }
             }
         }
