@@ -1,5 +1,6 @@
 package app.fuckpo0jixian
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
@@ -169,6 +170,7 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
     val context = LocalContext.current
     var rename by remember { mutableStateOf(false) }
     var peer by remember { mutableStateOf<PeerLayout?>(null) }
+    var export by remember { mutableStateOf(false) }
     Section(header = "多设备", footer = "每台设备只授权自己负责的槽位。导入其他设备的导出数据，只会标注它管理的槽位，不会授权或写入。") {
         ListRow("本机名称", value = s.deviceName.ifBlank { "未设置" }, chevron = true, enabled = !busy) { rename = true }
         ActionRow("从剪贴板导入其他设备的分工", enabled = !busy && s.snapshot != null) {
@@ -176,7 +178,21 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
                 ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
             runCatching { PeerImport.parse(text) }.onSuccess { peer = it }.onFailure { c.feedback.value = statusText("IMPORT_INVALID") }
         }
+        ActionRow("导出脱敏数据") { export = true }
     }
+    if (export) IosAlert("导出脱敏数据", { export = false },
+        message = "Token 已去除，账户标识、Wi-Fi 名称和接入点不导出；IP 只保留前两段（如 203.0.*.0/24）。可用于复盘，也可在其他设备上导入分工。",
+        actions = listOf(
+            AlertAction("分享", preferred = true) {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.exportText())
+                    .putExtra(Intent.EXTRA_SUBJECT, "去他妈的鸡险 · 脱敏数据")
+                context.startActivity(Intent.createChooser(send, "导出脱敏数据")); export = false
+            },
+            AlertAction("复制") {
+                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("FuckPo0JiXian", c.exportText()))
+                c.feedback.value = "已复制脱敏数据"; export = false
+            },
+            AlertAction("取消") { export = false }))
     if (rename) {
         var input by remember { mutableStateOf(s.deviceName) }
         val colors = Apple.colors
