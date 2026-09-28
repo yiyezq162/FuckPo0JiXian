@@ -80,7 +80,7 @@ class UiTest {
         rule.onNodeWithTag("tab-2").performClick()
         rule.onNodeWithText("Po0 账户").assertExists()
         rule.onNodeWithTag("tab-3").performClick()
-        rule.onNodeWithText("下次可请求").assertExists()
+        rule.onNodeWithText("上次检查").assertExists()
     }
     @Test fun demoObserveCheckDoesNotWriteAndSurvivesStoreReload() {
         val previous = controller.store.load().accountContext
@@ -89,7 +89,7 @@ class UiTest {
         rule.runOnUiThread { controller.store.save(controller.store.load().copy(paused = false, mode = Mode.OBSERVE, nextAllowed = 0)) }
         rule.onNodeWithText("立即检查").performClick()
         rule.waitUntil(10_000) { controller.store.load().status == "OBSERVED_MISSING" }
-        rule.onAllNodesWithText(statusText("OBSERVED_MISSING")).onFirst().assertExists()
+        rule.onAllNodesWithText(statusText("OBSERVED_MISSING"), substring = true).onFirst().assertExists()
         val persisted = LocalStore(rule.activity).load()
         assertEquals("OBSERVED_MISSING", persisted.status)
         assertEquals(5, persisted.snapshot!!.entries.size)

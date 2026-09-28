@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- In-app updates: installs the verified APK from this project's releases; Android still asks every time. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application android:name=".FuckPo0JiXianApp" android:label="去他妈的鸡险" android:icon="@mipmap/ic_launcher"
         android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="false" android:supportsRtl="true" android:theme="@style/Theme.FuckPo0JiXian">
@@ -28,6 +30,7 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <receiver android:name=".UpdateReceiver" android:exported="false" />
         <service android:name=".RuntimeSyncService" android:exported="false"
             android:stopWithTask="false" android:foregroundServiceType="dataSync" />
     </application>

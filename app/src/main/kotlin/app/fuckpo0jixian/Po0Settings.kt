@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,11 +65,36 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     }
     item(key = "po0-background") { BackgroundSection() }
     item(key = "po0-runtime") { RuntimeSection(s, c, busy) }
-    item(key = "po0-about") {
-        val context = LocalContext.current
-        val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "—" }
-        Section(header = "关于", inset = 58.dp, footer = "Token 与配置只保存在本机，不会备份或上传。") {
-            ListRow("版本", value = version, leading = { IconTile(Icons.Rounded.Info, Apple.colors.gray) })
+    item(key = "po0-about") { AboutSection(s, c) }
+}
+
+/** Version and in-app update: check, download (verified), then Android's own install confirmation. */
+@Composable private fun AboutSection(s: State, c: Controller) {
+    val state by c.updater.state.collectAsState()
+    val colors = Apple.colors
+    Section(header = "关于", inset = 58.dp, footer = "Token 与配置只保存在本机，不会备份或上传。" +
+        if (s.runtimeMode == RuntimeMode.MODULE) "模块需在 Magisk / KernelSU 中另行更新。" else "") {
+        ListRow("版本", value = c.updater.version, leading = { IconTile(Icons.Rounded.Info, colors.gray) })
+        when (val u = state) {
+            is UpdateState.Available -> {
+                ListRow("新版本 ${u.update.version}", subtitle = Updates.summary(u.update.release.notes, 4).ifBlank { null },
+                    leading = { IconTile(Glyphs.Download, colors.red) })
+                ActionRow("下载并安装") { c.updater.install(u.update) }
+            }
+            is UpdateState.Downloading -> {
+                ListRow("正在下载 ${u.update.version}", value = u.fraction?.let { "${(it * 100).toInt()}%" },
+                    leading = { IconTile(Glyphs.Download, colors.accent) })
+                LinearProgressIndicator(progress = { u.fraction ?: 0f }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    color = colors.accent, trackColor = colors.fill, drawStopIndicator = {})
+                ActionRow("取消", color = colors.red, onClick = c.updater::cancel)
+            }
+            is UpdateState.Installing -> ListRow("等待系统安装确认…", leading = { IconTile(Glyphs.Download, colors.accent) })
+            is UpdateState.Failed -> {
+                ListRow(u.message, titleColor = colors.orange, leading = { IconTile(Icons.Rounded.Warning, colors.orange) })
+                ActionRow(if (u.update != null) "重试" else "检查更新") { u.update?.let(c.updater::install) ?: c.updater.check(manual = true) }
+            }
+            else -> ActionRow(when (u) { is UpdateState.Latest -> "已是最新 · 再次检查"; else -> "检查更新" },
+                loading = u == UpdateState.Checking) { c.updater.check(manual = true) }
         }
     }
 }

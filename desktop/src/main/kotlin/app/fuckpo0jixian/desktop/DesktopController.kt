@@ -36,13 +36,25 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     private var followUp: Job? = null
     private var previewSlot: Int? = null
     val version: String = javaClass.getResource("/version.txt")?.readText()?.trim() ?: "dev"
+    val prefs = DesktopPrefs(store.dir)
+    val notify = MutableStateFlow(prefs.notify)
+    val updater = Updater(version, store.dir, prefs)
+    /** Page the tray menu asked the window to show. */
+    val requestedPage = MutableStateFlow<Page?>(null)
+    /** Set by the app: quits so an installer can replace it. */
+    var quit: () -> Unit = {}
 
     fun start() {
         if (store.load().deviceName.isBlank()) runCatching {
             store.save(store.load().copy(deviceName = when (os) { Os.MAC -> "Mac"; Os.WINDOWS -> "Windows"; Os.OTHER -> "电脑" }))
         }
         scope.launch { monitor() }
+        // Daily update check in the background; nothing is downloaded without a click.
+        scope.launch { while (isActive) { updater.check(this, manual = false); delay(3_600_000) } }
     }
+    fun checkForUpdates() = updater.check(scope, manual = true)
+    fun installUpdate(update: Update) = updater.install(scope, update) { quit() }
+    fun notify(value: Boolean) { prefs.notify = value; notify.value = value }
 
     private fun scheduleEnabled(s: State = store.load()) = !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null && credentialPresent.value
 
@@ -80,6 +92,27 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         operation = scope.launch { runCheck(manual, observeOnly, fallback) }
     }
     fun check() = launchCheck(manual = true)
+    /** Compares the exit only (STUN, else ip.3322.net); Po0 is not asked. */
+    fun checkDomestic() {
+        if (operation?.isActive == true) return
+        operation = scope.launch {
+            if (!gate.tryLock()) return@launch
+            busy.value = true
+            try {
+                val l = withContext(Dispatchers.IO) { network() }
+                link.value = l
+                feedback.value = when {
+                    store.load().paused -> "请先恢复检查"
+                    !l.online -> "当前没有可用网络"
+                    !LocalCheck.probeAllowed(store.load(), l.key, now()) -> "查询太频繁，请稍后再试"
+                    updateDomestic(l) -> "直连出口 ${store.load().domesticExit?.ipv4}"
+                    else -> "查询失败，保留上次结果"
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { feedback.value = "查询失败，保留上次结果" }
+            finally { busy.value = false; gate.unlock() }
+        }
+    }
     fun checkConnection() = launchCheck(manual = true, observeOnly = true)
 
     private suspend fun updateDomestic(l: DesktopLink): Boolean {
@@ -166,7 +199,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                 val marker = "NOTIFIED:$code:${latest.layout?.version}"
                 if (latest.layout != null && marker !in latest.layout!!.notices) {
                     store.save(latest.copy(layout = latest.layout!!.copy(notices = (latest.layout!!.notices + marker).toList().takeLast(100).toSet())))
-                    alerts.tryEmit(statusText(code))
+                    if (notify.value) alerts.tryEmit(desktopText(code))
                 }
             }
             return code
@@ -230,6 +263,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName,
             fallbackMinutes = it.fallbackMinutes)
     }
+    fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
     fun previewManual(number: Int) {
         if (busy.value || operation?.isActive == true) return
         operation = scope.launch {

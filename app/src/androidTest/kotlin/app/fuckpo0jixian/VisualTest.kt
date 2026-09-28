@@ -41,7 +41,13 @@ class VisualTest {
                     ManagedSlot(2, "本机移动", SlotPurpose.MOBILE, Writer.LOCAL),
                     ManagedSlot(3, "笔记本外出", SlotPurpose.MOBILE, Writer.OTHER_DEVICE, owner = "Mac", status = "PEER_UPDATED",
                         changedAt = System.currentTimeMillis()), ManagedSlot(4, "保留用途"))),
-                networkKey = "demo", status = "PRESENT_CURRENT_CHECK", lastCheck = System.currentTimeMillis()))
+                networkKey = "demo", status = "PRESENT_CURRENT_CHECK", lastCheck = System.currentTimeMillis() - 180_000,
+                domesticExit = DomesticExit("203.0.113.87", System.currentTimeMillis() - 180_000, "demo", ProbeSource.IP3322),
+                probeStatus = "PROBE_OBSERVED",
+                observations = (0 until 12).map { Observation(System.currentTimeMillis() - it * 7_200_000L,
+                    if (it % 3 == 0) Cidr("192.0.2.0/24") else Cidr("203.0.113.0/24"), "wifi") },
+                events = listOf("SLOT_UPDATED", "PEER_UPDATED", "PRESENT_CURRENT_CHECK", "LOCAL_UNCHANGED", "PRESENT_CURRENT_CHECK", "SLOT_CURRENT")
+                    .mapIndexed { i, code -> Event(System.currentTimeMillis() - (6 - i) * 1_800_000L, code) }))
         }
         try {
             (0..3).forEach { index ->

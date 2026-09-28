@@ -28,7 +28,7 @@ internal fun writeAtomically(file: Path, bytes: ByteArray) {
 }
 
 /** Same contract as the Android store: an unreadable file is protected, never overwritten with an empty state. */
-class FileStore(dir: Path = dataDir) : StateStore {
+class FileStore(val dir: Path = dataDir) : StateStore {
     private val file = dir.resolve("state.json")
     private var recoveryRequired = false
     val flow = MutableStateFlow(read())

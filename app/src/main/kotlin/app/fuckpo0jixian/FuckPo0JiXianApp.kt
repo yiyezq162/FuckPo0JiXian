@@ -29,6 +29,7 @@ class Controller(private val context: Context) {
     val store = LocalStore(context)
     val vault = TokenVault(context)
     val runtime = RuntimeBridge(context)
+    val updater = AppUpdater(context)
     val credentialPresent = MutableStateFlow(vault.exists())
     val policy = Policy()
     val engine = Engine(store, policy = policy)
@@ -388,6 +389,7 @@ class Controller(private val context: Context) {
     }
     fun revokeWifi(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
     fun foreground() {
+        updater.check(manual = false) // at most once a day, nothing downloaded without a tap
         refreshSchedule()
         wifiObserver.start { changed() }
         manualPreview.value = null

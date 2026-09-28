@@ -12,6 +12,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -108,7 +111,7 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                             }
                         }
                         when (page) {
-                            0 -> homeItems(s, busy, network, currentKey, history, credential, c, configure = { page = 2 }) { page = 1 }
+                            0 -> homeItems(s, busy, network, currentKey, credential, c, configure = { page = 2 }) { page = 1 }
                             1 -> slotItems(s, c, busy, background, edit = { editing = it }) { page = 2 }
                             2 -> po0Items(s, c, credential, busy, requestNotifications)
                             3 -> recordItems(s, history, c)
@@ -129,12 +132,13 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                 }
                 Toast(feedback.takeIf { it != statusText(s.status) } ?: "", Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp))
             }
-            TabBar(page) { page = it }
+            val update by c.updater.state.collectAsStateWithLifecycle()
+            TabBar(page, badge = if (update is UpdateState.Available) 2 else -1) { page = it }
         }
     }
 }
 
-@Composable private fun TabBar(page: Int, select: (Int) -> Unit) {
+@Composable private fun TabBar(page: Int, badge: Int, select: (Int) -> Unit) {
     val c = Apple.colors
     Column(Modifier.fillMaxWidth().background(c.bar)) {
         HorizontalDivider(thickness = 0.5.dp, color = c.separator)
@@ -144,7 +148,10 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("tab-$i")
                     .selectable(page == i, remember { MutableInteractionSource() }, indication = null, role = Role.Tab) { select(i) },
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Icon(tab.icon, null, tint = tint, modifier = Modifier.size(26.dp))
+                    Box {
+                        Icon(tab.icon, null, tint = tint, modifier = Modifier.size(26.dp))
+                        if (badge == i) Box(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-1).dp).size(9.dp).background(c.red, CircleShape))
+                    }
                     Spacer(Modifier.height(2.dp))
                     Text(tab.title, style = Apple.caption, color = tint)
                 }
@@ -153,66 +160,93 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     }
 }
 
-@Composable private fun StatusHero(icon: ImageVector, tint: Color, title: String, subtitle: String) {
-    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Box(Modifier.size(48.dp).background(tint.copy(alpha = 0.15f), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = tint, modifier = Modifier.size(26.dp))
+/** Big, calm status: what the app is doing, then the two facts people check (exit and network). */
+@Composable private fun StatusHero(icon: ImageVector, tint: Color, title: String, subtitle: String, busy: Boolean,
+                                   facts: List<Pair<String, String>>) {
+    val colors = Apple.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(Modifier.size(60.dp), contentAlignment = Alignment.Center) {
+                if (busy) {
+                    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(1f, 1.35f,
+                        infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "scale")
+                    Box(Modifier.size(56.dp * pulse).background(tint.copy(alpha = 0.10f), CircleShape))
+                }
+                Box(Modifier.size(56.dp).background(tint.copy(alpha = 0.15f), CircleShape), contentAlignment = Alignment.Center) {
+                    AnimatedContent(icon, label = "icon") { Icon(it, null, tint = tint, modifier = Modifier.size(30.dp)) }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                AnimatedContent(title, label = "title", transitionSpec = { fadeIn() togetherWith fadeOut() }) {
+                    Text(it, style = Apple.largeTitle.copy(fontSize = Apple.title.fontSize * 1.25f, lineHeight = Apple.title.lineHeight * 1.2f), color = colors.label)
+                }
+                Text(subtitle, style = Apple.subhead, color = colors.secondary)
+            }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = Apple.title, color = Apple.colors.label)
-            Text(subtitle, style = Apple.subhead, color = Apple.colors.secondary)
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            facts.forEach { (label, value) ->
+                Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(colors.fill.copy(alpha = colors.fill.alpha * 0.7f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(label, style = Apple.footnote, color = colors.secondary)
+                    Text(value, style = Apple.headline.copy(fontFeatureSettings = "tnum"), color = colors.label, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }
 
-private fun LazyListScope.homeItems(s: State, busy: Boolean, network: String, currentKey: String?, history: List<FamiliarNetwork>,
+/** "刚刚", "5 分钟前", else the time. */
+internal fun ago(value: Long): String {
+    if (value <= 0) return "尚未检查"
+    val minutes = (System.currentTimeMillis() - value) / 60_000
+    return when { minutes < 1 -> "刚刚检查"; minutes < 60 -> "$minutes 分钟前检查"; minutes < 24 * 60 -> "${minutes / 60} 小时前检查"; else -> "${time(value)} 检查" }
+}
+
+private fun LazyListScope.homeItems(s: State, busy: Boolean, network: String, currentKey: String?,
                                     credential: Boolean, c: Controller, configure: () -> Unit, manage: () -> Unit) {
     item(key = "home-status") {
         val colors = Apple.colors
         val wifi by c.wifiObservation.collectAsState()
         val stale = !s.demo && s.snapshot != null && s.networkKey != currentKey
         val auto = s.mode == Mode.AUTO && s.layout != null
+        val (icon, tint, title) = when {
+            busy -> Triple(Glyphs.Sync, colors.accent, "正在检查")
+            s.globalBlock != null || s.authBlocked -> Triple(Icons.Rounded.Warning, colors.red, "需要处理")
+            s.paused -> Triple(Glyphs.Pause, colors.orange, "已暂停")
+            auto -> Triple(Glyphs.Shield, colors.green, "自动同步中")
+            else -> Triple(Icons.Rounded.Info, colors.accent, "仅查询")
+        }
+        val subtitle = when {
+            busy -> "请稍候"
+            stale -> "网络已切换，等待检查"
+            s.lastCheck <= 0 -> statusText(s.status)
+            else -> "${statusText(s.status)} · ${ago(s.lastCheck)}"
+        }
+        val identity = wifiIdentityText(s, wifi)
         Section {
-            when {
-                busy -> StatusHero(Glyphs.Sync, colors.accent, "正在检查", "请稍候")
-                s.paused -> StatusHero(Glyphs.Pause, colors.orange, "已暂停", if (stale) "网络已切换" else statusText(s.status))
-                else -> StatusHero(if (auto) Glyphs.Shield else Icons.Rounded.Info, if (auto) colors.green else colors.accent,
-                    if (auto) "自动同步中" else "仅查询", if (stale) "网络已切换，等待检查" else statusText(s.status))
-            }
-            val identity = wifiIdentityText(s, wifi)
-            ListRow("网络", value = if (s.demo) "模拟网络" else listOfNotNull(networkText(network), identity).joinToString(" · "))
-            s.snapshot?.let { ListRow(if (stale) "上次出口" else "当前出口", value = it.current.value) }
-            ListRow("上次检查", value = time(s.lastCheck))
+            StatusHero(icon, tint, title, subtitle, busy, listOf(
+                (if (stale) "上次出口" else "当前出口") to (s.snapshot?.current?.value ?: "未检查"),
+                "网络" to (if (s.demo) "模拟网络" else listOfNotNull(networkText(network), identity).joinToString(" · "))))
         }
     }
     item(key = "home-actions") {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            PrimaryButton("立即检查", c::check, enabled = !busy && !s.paused, loading = busy)
-            PrimaryButton(if (s.paused) "恢复检查" else "暂停检查", { c.pause(!s.paused) }, tinted = true)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PrimaryButton("立即检查", c::check, Modifier.weight(1f), enabled = !busy && !s.paused, loading = busy)
+            PrimaryButton(if (s.paused) "恢复检查" else "暂停检查", { c.pause(!s.paused) }, Modifier.width(128.dp), tinted = true)
         }
     }
     item(key = "home-capacity") {
         val snap = s.snapshot
-        Section(header = "名额", footer = if (snap == null) "连接 Po0 并检查后显示。" else null, inset = if (snap == null) 16.dp else 60.dp) {
+        Section(header = "名额", footer = if (snap == null) "连接 Po0 并检查后显示。" else null) {
             if (snap == null) {
                 ListRow("尚未获取", titleColor = Apple.colors.secondary)
                 if (!credential && !s.demo) ActionRow("连接 Po0", onClick = configure)
             } else {
                 CapacitySummary(s)
-                (0 until snap.capacity).forEach { number ->
-                    val slot = s.layout?.slots?.find { it.number == number } ?: ManagedSlot(number)
-                    ListRow(slot.name.ifBlank { purposeText(slot.purpose) }, value = snap.entries.find { it.slot == number }?.cidr?.value ?: "空",
-                        leading = { NumberBadge("${number + 1}", purposeColor(slot.purpose)) }, chevron = true, onClick = manage)
-                }
-                snap.entries.filter { it.slot == null }.forEach {
-                    ListRow(it.cidr.value, subtitle = "未分配槽号", leading = { NumberBadge("–", Apple.colors.gray) }, chevron = true, onClick = manage)
-                }
+                ListRow("查看槽位", value = "${s.layout?.slots?.count { it.writer == Writer.LOCAL && it.authorized } ?: 0} 个由本机管理",
+                    chevron = true, onClick = manage)
             }
-        }
-    }
-    if (history.isNotEmpty()) item(key = "home-familiar") {
-        Section(header = "常用网络") {
-            history.take(3).forEach { n -> ListRow(n.cidr.value, value = if (n.common) "常用" else "最近") }
         }
     }
 }
@@ -222,39 +256,49 @@ private fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>, 
         Section(header = "检查") {
             ListRow("状态", value = statusText(s.status))
             ListRow("上次检查", value = time(s.lastCheck))
-            ListRow("下次可请求", value = time(s.nextAllowed))
-            ListRow("连续失败", value = "${s.failures} 次")
+            // Only worth a row when something is actually holding checks back.
+            if (s.failures > 0) ListRow("连续失败 ${s.failures} 次", value = "下次 ${time(s.nextAllowed)}", titleColor = Apple.colors.orange)
             if (s.authBlocked) ListRow("Token 无效，请在设置中更新", titleColor = Apple.colors.red)
         }
     }
     item(key = "rec-exit") {
-        Section(header = "出口", footer = "国内出口经 ip.3322.net 查询，用于核对 Po0 识别的网段。") {
+        Section(header = "出口", footer = "国内出口经 ip.3322.net 查询，与 Po0 识别一致才会写入。") {
             val d = s.domesticExit
-            ListRow("国内出口", value = d?.ipv4 ?: "未查询")
-            d?.let { ListRow("所在网段", value = it.cidr.value); ListRow("查询时间", value = time(it.time)) }
-            ListRow("Po0 识别", value = s.snapshot?.current?.value ?: "未检查")
-            ListRow("查询状态", value = statusText(s.probeStatus))
+            val current = s.snapshot?.current
+            ListRow("国内出口", subtitle = d?.let { "${time(it.time)} 查询" } ?: statusText(s.probeStatus), value = d?.ipv4 ?: "未查询")
+            ListRow("Po0 识别", value = current?.value ?: "未检查", trailing = if (d != null && current != null) {
+                { Capsule(if (d.cidr == current) "一致" else "不一致", if (d.cidr == current) Apple.colors.green else Apple.colors.orange) }
+            } else null)
             ActionRow("查询国内出口", enabled = !s.demo && !s.paused, onClick = c::checkDomestic)
         }
     }
     item(key = "rec-history") {
-        var confirm by remember { mutableStateOf(false) }
-        Section(header = "常用网络", footer = "根据近 7 天的使用情况统计，不会据此修改白名单。") {
+        var all by rememberSaveable { mutableStateOf(false) }
+        Section(header = "常用网络", footer = "近 7 天的使用统计，只作参考。", modifier = Modifier.animateContentSize()) {
             if (history.isEmpty()) ListRow("暂无记录", titleColor = Apple.colors.secondary)
-            history.take(20).forEach { n ->
-                ListRow(n.cidr.value, subtitle = "${if (n.common) "常用" else "最近"} · ${n.days} 天 · ${n.visits} 次", value = time(n.lastSeen))
+            history.take(if (all) 20 else 3).forEach { n ->
+                ListRow(n.cidr.value, subtitle = "${n.days} 天 · ${n.visits} 次 · ${time(n.lastSeen)}",
+                    trailing = if (n.common) { { Capsule("常用", Apple.colors.green) } } else null)
             }
+            if (history.size > 3) ActionRow(if (all) "收起" else "显示全部 ${minOf(history.size, 20)} 个") { all = !all }
+        }
+    }
+    item(key = "rec-events") {
+        var all by rememberSaveable { mutableStateOf(false) }
+        val events = s.events.filter { it.time >= System.currentTimeMillis() - c.policy.retentionMs }.takeLast(30).reversed()
+        Section(header = "事件", modifier = Modifier.animateContentSize()) {
+            if (events.isEmpty()) ListRow("暂无事件", titleColor = Apple.colors.secondary)
+            events.take(if (all) 30 else 3).forEach { e -> ListRow(statusText(e.code), value = time(e.time)) }
+            if (events.size > 3) ActionRow(if (all) "收起" else "显示全部 ${events.size} 条") { all = !all }
+        }
+    }
+    item(key = "rec-clear") {
+        var confirm by remember { mutableStateOf(false) }
+        Section(footer = "只反映 Po0 与国内查询站看到的出口，不代表所有线路都可用。") {
             ActionRow("清空记录", color = Apple.colors.red) { confirm = true }
         }
         if (confirm) IosAlert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。", actions = listOf(
             AlertAction("取消") { confirm = false },
             AlertAction("清空", destructive = true) { c.clearHistory(); confirm = false }))
-    }
-    item(key = "rec-events") {
-        val events = s.events.filter { it.time >= System.currentTimeMillis() - c.policy.retentionMs }.takeLast(30).reversed()
-        Section(header = "事件", footer = "仅反映 Po0 与国内查询站看到的出口，不代表所有线路都可用。") {
-            if (events.isEmpty()) ListRow("暂无事件", titleColor = Apple.colors.secondary)
-            events.forEach { e -> ListRow(statusText(e.code), value = time(e.time)) }
-        }
     }
 }
