@@ -64,6 +64,15 @@ object LayoutRules {
             layout.identities.map { it.id }.distinct().size != layout.identities.size)
             throw ApiFailure("SLOT_INVALID")
     }
+    /** Whether saving [slot] over [old] grants new automatic power, so the editor must ask for「授权本机管理」again. */
+    fun needsAuthorization(old: ManagedSlot?, slot: ManagedSlot): Boolean {
+        val granting = slot.writer == Writer.LOCAL && slot.purpose != SlotPurpose.RESERVED &&
+            ((old?.automatic != true && slot.automatic) || (old?.allowUnknownWifi != true && slot.allowUnknownWifi) ||
+                (slot.automatic && (old?.writer != slot.writer || old.purpose != slot.purpose)))
+        // Accepting other writers relaxes conflict protection, so it needs the same explicit confirmation.
+        val sharing = slot.shared && slot.writer == Writer.LOCAL && slot.purpose == SlotPurpose.FIXED && old?.shared != true
+        return granting || sharing
+    }
     fun saveSlot(s: State, slot: ManagedSlot, acknowledge: Boolean, now: Long): State {
         val snap = requireNotNull(s.snapshot) { "CONFIG_QUERY_FIRST" }
         if (acknowledge) require(now - s.lastCheck in 0..120_000) { "CONFIG_QUERY_FIRST" }
@@ -71,14 +80,9 @@ object LayoutRules {
         require(layout.pending == null) { "PENDING_REVIEW" }
         val old = layout.slots.find { it.number == slot.number }
         val occupant = snap.entries.find { it.slot == slot.number }?.cidr
-        val granting = slot.writer == Writer.LOCAL && slot.purpose != SlotPurpose.RESERVED &&
-            ((old?.automatic != true && slot.automatic) || (old?.allowUnknownWifi != true && slot.allowUnknownWifi) ||
-                (slot.automatic && (old?.writer != slot.writer || old.purpose != slot.purpose)))
-        require(!granting || acknowledge) { "AUTHORIZATION_REQUIRED" }
+        require(!needsAuthorization(old, slot) || acknowledge) { "AUTHORIZATION_REQUIRED" }
         val changedAuthority = old?.purpose != slot.purpose || old.writer != slot.writer
         val shared = slot.shared && slot.writer == Writer.LOCAL && slot.purpose == SlotPurpose.FIXED
-        // Accepting other writers relaxes conflict protection, so it needs the same explicit confirmation.
-        require(!shared || old?.shared == true || acknowledge) { "AUTHORIZATION_REQUIRED" }
         val next = slot.copy(name = slot.name.trim().take(40), owner = slot.owner.trim().take(24), shared = shared,
             authorized = slot.writer == Writer.LOCAL && slot.purpose != SlotPurpose.RESERVED && (acknowledge || (old?.authorized == true && !changedAuthority)),
             baseline = if (acknowledge) occupant else old?.baseline,

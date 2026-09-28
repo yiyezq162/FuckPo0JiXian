@@ -137,6 +137,15 @@ class SlotUiTest {
         rule.onNodeWithText("取消").performClick()
         assertTrue(c.store.load().layout!!.slots.first { it.number == 2 }.authorized)
     }
+    @Test fun allowingUnknownWifiOnAuthorizedSlotAsksAgainAndSaves() {
+        demo(); open(3)
+        rule.onNodeWithContentDescription("授权本机管理").assertDoesNotExist()
+        // New automatic power: the switch must come back, otherwise saving could never succeed.
+        rule.onNodeWithContentDescription("未知 Wi-Fi 也可更新").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("授权本机管理").performScrollTo().assertIsOff().performClick()
+        rule.onNodeWithText("保存").performClick()
+        rule.waitUntil { c.store.load().layout!!.slots.first { it.number == 2 }.allowUnknownWifi }
+    }
     @Test fun authorizingFixedSlotStaysOpenOnWifiBindingStep() {
         demo(); open(5)
         rule.onNodeWithText("固定网络").performScrollTo().performClick()

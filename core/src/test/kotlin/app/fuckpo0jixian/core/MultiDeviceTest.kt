@@ -112,6 +112,17 @@ class MultiDeviceTest {
         assertFalse(LayoutRules.saveSlot(s, mobile, true, clock).layout!!.slots.first { it.number == 0 }.shared, "only fixed slots can be shared")
     }
 
+    @Test fun addingUnknownWifiToAnAuthorizedMobileSlotAsksAgain() {
+        val mobile = ManagedSlot(2, "手机", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, authorized = true, baseline = phone)
+        val s = state(shared = false).let { it.copy(lastCheck = clock, layout = it.layout!!.copy(slots = it.layout!!.slots.map { p -> if (p.number == 2) mobile else p })) }
+        val candidate = mobile.copy(allowUnknownWifi = true)
+        // The editor hides the switch only when the save would not need it; otherwise saving could never succeed.
+        assertTrue(LayoutRules.needsAuthorization(mobile, candidate))
+        assertEquals("AUTHORIZATION_REQUIRED", assertFailsWith<IllegalArgumentException> { LayoutRules.saveSlot(s, candidate, false, clock) }.message)
+        assertTrue(LayoutRules.saveSlot(s, candidate, true, clock).layout!!.slots.first { it.number == 2 }.allowUnknownWifi)
+        assertFalse(LayoutRules.needsAuthorization(mobile, mobile.copy(name = "新名字", temporaryHold = true)))
+    }
+
     @Test fun desktopGatewayIdentityMatchesLikeAWifiAp() = runTest {
         val gateway = "a4:11:22:33:44:55"
         val l = layout(false).copy(identities = listOf(NetworkIdentity("home", "家", "gw:192.168.5.1", setOf(AuthorizedAp(gateway, WifiSecurity.GATEWAY)))))

@@ -229,9 +229,9 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     LaunchedEffect(bindNext, bindable) {
         if (bindNext && bindable) { c.refreshWifi(); withFrameNanos { }; scroll.animateScrollTo(scroll.maxValue) }
     }
+    val candidate = original.copy(name = name, purpose = purpose, writer = writer, automatic = automatic,
+        allowUnknownWifi = unknown, temporaryHold = hold, owner = owner, shared = shared)
     fun save() {
-        val candidate = original.copy(name = name, purpose = purpose, writer = writer, automatic = automatic,
-            allowUnknownWifi = unknown, temporaryHold = hold, owner = owner, shared = shared)
         val validation = runCatching { LayoutRules.saveSlot(s, candidate, acknowledge, System.currentTimeMillis()) }
         if (validation.isSuccess) {
             c.configureSlot(candidate, acknowledge)
@@ -292,8 +292,9 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                         }
                     }
                     // Show the saved authorization; the switch only grants a new one (and re-bases on this save).
+                    // Any edit that adds automatic power (e.g. unknown Wi-Fi) must bring the switch back, or saving deadlocks.
                     val authorizedNow = original.authorized && purpose == original.purpose && writer == original.writer &&
-                        (original.shared || !shared || purpose != SlotPurpose.FIXED)
+                        !LayoutRules.needsAuthorization(original, candidate)
                     if (authorizedNow && !acknowledge) Section(footer = "授权基线：${original.baseline?.value ?: "空槽"}。" +
                         if (original.shared) "共管设备的写入会被接受；刚被改成其他值时本机会先等待。" else "此槽被其他设备改动时会自动取消授权。") {
                         ListRow("授权本机管理", trailing = {
@@ -302,7 +303,8 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                                 Icon(Icons.Rounded.Check, null, tint = colors.green, modifier = Modifier.size(20.dp))
                             }
                         })
-                    } else Section(footer = "当前记录（${remote?.value ?: "空"}）将作为授权基线。" +
+                    } else Section(footer = (if (original.authorized) "新增了自动更新权限，需再次确认。" else "") +
+                        "当前记录（${remote?.value ?: "空"}）将作为授权基线。" +
                         if (shared && purpose == SlotPurpose.FIXED) "同一网络的其他设备也可写入此槽。" else "请确认没有其他设备在写入此槽。") {
                         ToggleRow("授权本机管理", acknowledge, { acknowledge = it })
                     }

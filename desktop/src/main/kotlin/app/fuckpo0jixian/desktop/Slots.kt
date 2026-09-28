@@ -222,11 +222,12 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
                     if (purpose == SlotPurpose.FIXED) { Divider(48.dp); ToggleRow("与其他设备共管", shared, { shared = it }, subtitle = "同一网络的手机或电脑也可更新", icon = Glyph.People, iconTint = colors.green) }
                     if (purpose == SlotPurpose.MOBILE) { Divider(48.dp); ToggleRow("锁定当前 IP", hold, { hold = it }, subtitle = "网络变化时不替换这一格", icon = Glyph.Lock, iconTint = colors.gray) }
                 }
+                // Any edit that adds automatic power must bring the switch back, or saving deadlocks.
                 val authorizedNow = original.authorized && purpose == original.purpose && writer == original.writer &&
-                    (original.shared || !shared || purpose != SlotPurpose.FIXED)
+                    !LayoutRules.needsAuthorization(original, candidate)
                 Group("授权", footer = if (authorizedNow && !acknowledge) "基线 ${original.baseline?.value ?: "空槽"}。" +
                     (if (original.shared) "接受共管设备的写入。" else "被其他设备改动时会自动取消授权。")
-                    else "以当前记录（${remote?.value ?: "空"}）为基线。" + if (shared && purpose == SlotPurpose.FIXED) "" else "请确认没有其他设备写入此槽。") {
+                    else (if (original.authorized) "新增了自动更新权限，需再次确认。" else "") + "以当前记录（${remote?.value ?: "空"}）为基线。" + if (shared && purpose == SlotPurpose.FIXED) "" else "请确认没有其他设备写入此槽。") {
                     if (authorizedNow && !acknowledge) SettingRow("授权本机管理", icon = Glyph.Shield, iconTint = colors.green) { Tag("已授权", colors.green, Glyph.Check) }
                     else ToggleRow("授权本机管理", acknowledge, { acknowledge = it }, icon = Glyph.Shield, iconTint = colors.orange)
                 }
