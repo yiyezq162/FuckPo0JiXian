@@ -6,18 +6,20 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
+import app.fuckpo0jixian.core.Redact
 import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /**
- * Background lifecycle log for debugging kills: when the process started and what woke it, why the previous
- * process ended (Android 11+ keeps the system's own exit records), fallback alarm lateness, Doze transitions,
- * network changes and each check's result. No token, addresses or Wi-Fi names. Each line starts with an ISO UTC
- * time, so sorting the lines orders them even though an exit is only learned when the next process starts.
+ * Activity log behind 导出调试信息: when the process started and what woke it, why the previous process ended
+ * (Android 11+ keeps the system's own exit records), fallback alarm lateness, Doze transitions, network changes,
+ * what people changed, every saved state change, each check's result and the module's own timeline. Addresses are
+ * cut to /16 and access point MACs dropped as each line is written ([Redact]); no Token, no Wi-Fi names. Each line
+ * starts with an ISO UTC time, so sorting orders them even though an exit is only learned when the next process starts.
  */
 object LifeLog {
-    private const val KEEP = 2_000
+    private const val KEEP = 3_000
     private val lock = Any()
     private lateinit var file: File
     private lateinit var appContext: Context
@@ -29,12 +31,12 @@ object LifeLog {
 
     fun add(text: String, at: Long = System.currentTimeMillis()) {
         if (!::file.isInitialized) return
-        val line = "${Instant.ofEpochMilli(at).truncatedTo(ChronoUnit.SECONDS)} ${text.replace('\n', ' ').take(200)}"
+        val line = "${Instant.ofEpochMilli(at).truncatedTo(ChronoUnit.SECONDS)} ${Redact.text(text.replace('\n', ' ')).take(240)}"
         synchronized(lock) {
             runCatching {
                 file.appendText(line + "\n")
                 // Trim in batches so the file is rewritten about once every 500 lines, not on every append.
-                if (file.length() > KEEP * 120L) {
+                if (file.length() > KEEP * 140L) {
                     val lines = file.readLines()
                     if (lines.size > KEEP + 500) file.writeText(lines.takeLast(KEEP).joinToString("\n", postfix = "\n"))
                 }

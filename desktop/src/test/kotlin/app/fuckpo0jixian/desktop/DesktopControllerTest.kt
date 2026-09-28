@@ -126,13 +126,18 @@ class DesktopControllerTest {
         clock += c.store.load().fallbackMs; internet.exit = "203.0.113.9"
         assertEquals("SLOT_UPDATED", c.runCheck(manual = false, fallback = true))
         assertEquals("203.0.113.0/24", internet.entries[0])
-        assertTrue("\"fallbackMinutes\": 2" in c.exportText())
+        assertTrue("\"fallbackMinutes\": 2" in c.debugText())
+        assertTrue(c.activity.recent().any { it.contains("CHECK auto-fallback SLOT_UPDATED") })
     }
 
-    @Test fun exportNeverContainsTheRouter() {
+    @Test fun debugInfoNeverContainsTheRouterButTheShareDoes() {
         val c = setup(FakeInternet("203.0.113.9", mutableMapOf())) { home }
-        val text = c.exportText()
-        assertFalse("a4:11:22:33:44:55" in text); assertFalse("192.168.5.1" in text); assertFalse("pgnfw_" in text)
-        assertTrue("已绑定路由器" in text)
+        runBlocking { c.runCheck(manual = true) }
+        val debug = c.debugText()
+        listOf("a4:11:22:33:44:55", "192.168.5.1", "192.168.5.20", "203.0.113.", "pgnfw_", "acct").forEach { assertFalse(it in debug, "debug leaked $it") }
+        assertTrue("\"activity\": [" in debug && "192.168.*.*" in debug)
+        val share = c.shareText()
+        assertTrue("a4:11:22:33:44:55" in share && "gw:192.168.5.1" in share, "the division carries the bound router")
+        assertFalse("pgnfw_" in share)
     }
 }

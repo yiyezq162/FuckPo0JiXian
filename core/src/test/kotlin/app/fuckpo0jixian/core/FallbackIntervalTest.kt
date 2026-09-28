@@ -17,12 +17,11 @@ class FallbackIntervalTest {
     }
 
     @Test fun exportCarriesTheInterval() {
-        val text = RedactedExport.build(State(fallbackMinutes = 4), "android", "0.8.0", 1_000)
+        val text = DebugExport.build(State(fallbackMinutes = 4), mapOf("platform" to "android"), 1_000)
         assertTrue("\"fallbackMinutes\": 4" in text)
         assertFalse("lifecycle" in text)
-        val withLog = RedactedExport.build(State(), "android", "0.8.2", 1_000, lifecycle = listOf("2026-09-28T03:10:00Z EXIT LOW_MEMORY"))
+        val withLog = DebugExport.build(State(), mapOf("platform" to "android"), 1_000, logs = mapOf("lifecycle" to listOf("2026-09-28T03:10:00Z EXIT LOW_MEMORY")))
         assertTrue("\"lifecycle\": [" in withLog && "EXIT LOW_MEMORY" in withLog)
-        PeerImport.parse(withLog) // an export carrying the log stays importable on other devices
     }
 
     @Test fun everyTickObservesTheExitAgainUnlessAProbeJustRan() {

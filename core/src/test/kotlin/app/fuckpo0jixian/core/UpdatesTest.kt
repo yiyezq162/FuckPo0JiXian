@@ -17,6 +17,7 @@ class UpdatesTest {
       {"tag_name":"v0.8.1-preview","draft":false,"prerelease":true,"html_url":"https://github.com/${Updates.REPO}/releases/tag/v0.8.1-preview",
        "body":"## 改动\n- 修复 [名额条](https://x) 顺序\n- 新增检查更新\n\n**Full Changelog**: https://x",
        "assets":[{"name":"FuckPo0JiXian-0.8.1-preview.apk","browser_download_url":"$base/v0.8.1-preview/FuckPo0JiXian-0.8.1-preview.apk","size":${apk.size}},
+                 {"name":"FuckPo0JiXian-Runtime-0.8.1-preview.zip","browser_download_url":"$base/v0.8.1-preview/FuckPo0JiXian-Runtime-0.8.1-preview.zip","size":2},
                  {"name":"SHA256SUMS-runtime08","browser_download_url":"$base/v0.8.1-preview/SHA256SUMS-runtime08","size":100}]},
       {"tag_name":"v0.8.0-preview","draft":false,"body":"","assets":[
                  {"name":"FuckPo0JiXian-Desktop-0.8.0-preview-macos-arm64.dmg","browser_download_url":"$base/v0.8.0-preview/a.dmg","size":3,"digest":"sha256:ABC"},
@@ -45,6 +46,15 @@ class UpdatesTest {
         assertNull(Updates.pick(releases, "0.8.1-preview", Updates::androidAsset))
         assertNull(Updates.pick(releases, "0.7.6-preview") { Updates.desktopAsset(it, "windows", "x64", "msi") })
         assertEquals("修复 名额条 顺序\n新增检查更新", Updates.summary(releases[0].notes))
+    }
+
+    @Test fun theModuleComesFromTheReleaseOfTheInstalledVersion() {
+        val releases = Updates.parse(json)
+        val module = Updates.exact(releases, "0.8.1-preview", Updates::runtimeAsset)!!
+        assertEquals("FuckPo0JiXian-Runtime-0.8.1-preview.zip", module.asset.name)
+        assertNull(Updates.exact(releases, "0.8.0-preview", Updates::runtimeAsset), "a release without the module")
+        assertNull(Updates.exact(releases, "0.9.0-preview", Updates::runtimeAsset), "drafts are not published")
+        assertNull(Updates.exact(releases, "dev", Updates::runtimeAsset))
     }
 
     @Test fun checksumFilesAreRead() {

@@ -57,6 +57,11 @@ class VisualTest {
             rule.onNodeWithTag("tab-2").performClick()
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("模块增强"))
             rule.onNodeWithText("模块增强").performClick()
+            rule.waitUntil(5_000) { rule.onAllNodesWithTag("module-sheet").fetchSemanticsNodes().isNotEmpty() }
+            Thread.sleep(600) // let the card finish rising
+            capture("module-sheet.png")
+            rule.onAllNodesWithText("取消").onLast().performClick()
+            rule.runOnUiThread { c.runtimeMode(RuntimeMode.MODULE) }
             rule.waitUntil { c.store.load().runtimeMode == RuntimeMode.MODULE }
             capture("runtime-mode.png")
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("诊断与安装说明"))
@@ -80,8 +85,8 @@ class VisualTest {
             rule.onNodeWithTag("tab-2").performClick()
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("从剪贴板导入其他设备的分工"))
             capture("multi-device.png")
-            rule.onNodeWithTag("page-list").performScrollToNode(hasText("导出脱敏数据"))
-            rule.onNodeWithText("导出脱敏数据").performClick()
+            rule.onNodeWithTag("page-list").performScrollToNode(hasText("导出本机分工"))
+            rule.onNodeWithText("导出本机分工").performClick()
             capture("export-dialog.png")
             rule.onAllNodesWithText("取消").onLast().performClick()
             rule.onNodeWithTag("page-list").performScrollToNode(hasText("更换 Token"))

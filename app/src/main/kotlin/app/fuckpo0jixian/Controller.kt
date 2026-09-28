@@ -27,6 +27,7 @@ class Controller(private val context: Context) {
     val vault = TokenVault(context)
     val runtime = RuntimeBridge(context)
     val updater = AppUpdater(context)
+    val moduleInstaller = ModuleInstaller(context)
     val credentialPresent = MutableStateFlow(vault.exists())
     val policy = Policy()
     val engine = Engine(store, policy = policy)
@@ -64,6 +65,11 @@ class Controller(private val context: Context) {
         runCatching { java.net.DatagramSocket().use { n.bindSocket(it) } }.isSuccess
 
     fun start() {
+        // Every saved change, one line per fact, for 导出调试信息.
+        scope.launch {
+            var previous = store.flow.value
+            store.flow.collect { next -> StateDiff.describe(previous, next).forEach { LifeLog.add("STATE $it") }; previous = next }
+        }
         scope.launch {
             store.flow.map { listOf(it.runtimeMode, it.paused, RuntimePolicy.enabled(it), it.fallbackMinutes) }.distinctUntilChanged()
                 .collect { runCatching { runtime.publish(store.load()) }.onFailure { runtime.status.value = "模块状态保存失败 · 已降级" } }
@@ -149,7 +155,9 @@ class Controller(private val context: Context) {
         val type = cm.getNetworkCapabilities(n)?.let { c -> when {
             c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"; c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"; else -> "other" } } ?: "none"
         android.util.Log.i("FuckPo0JiXianNet", "change type=$type atMs=${SystemClock.elapsedRealtime()}")
-        val net = "NET $type vpn=${cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true}"
+        val salt = store.load().accountContext
+        val net = "NET $type vpn=${cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true} " +
+            "addrs=${localAddresses(n) ?: "-"} wifi=${Redact.tag(identity?.ssid, salt) ?: "-"}/${Redact.tag(identity?.bssid, salt) ?: "-"}"
         if (net != lastNetLine) { lastNetLine = net; LifeLog.add(net) }
         manualPreview.value = null
         networkId = id
@@ -163,16 +171,18 @@ class Controller(private val context: Context) {
         if (n != null) scheduleCheck("network-check")
     } }
     /**
-     * What identifies this network's addressing: its IPv4 addresses, or on IPv6-only mobile data (464XLAT, whose
-     * IPv4 is a fixed 192.0.0.x on a stacked link) its global /64 prefixes. Prefixes, not addresses, so privacy
-     * address rotation within a prefix does not trigger checks.
+     * What identifies this network's addressing: its IPv4 addresses and its global IPv6 /64 prefixes. The prefix
+     * matters on home Wi-Fi: a PPPoE redial usually hands the router a new prefix while the phone keeps its LAN
+     * IPv4, so it is the only local sign of a new exit. Prefixes, not addresses, so privacy address rotation within
+     * a prefix does not trigger checks.
      */
     private fun localAddresses(n: Network?): String? {
         val addresses = n?.let { cm.getLinkProperties(it) }?.linkAddresses?.map { it.address } ?: return null
         val v4 = addresses.mapNotNull { (it as? java.net.Inet4Address)?.hostAddress }.sorted()
-        if (v4.isNotEmpty()) return v4.joinToString(",")
-        return addresses.filterIsInstance<java.net.Inet6Address>().filter { !it.isLinkLocalAddress && !it.isSiteLocalAddress && !it.isLoopbackAddress }
-            .map { it.address.take(8).joinToString("") { b -> "%02x".format(b) } }.distinct().sorted().joinToString(",")
+        val v6 = addresses.filterIsInstance<java.net.Inet6Address>().filter { (it.address[0].toInt() and 0xe0) == 0x20 }.map { a ->
+            (0 until 4).joinToString(":", postfix = "::/64") { i -> "%x".format(((a.address[2 * i].toInt() and 255) shl 8) or (a.address[2 * i + 1].toInt() and 255)) }
+        }.distinct().sorted()
+        return (v4 + v6).joinToString(",")
     }
     /** This device's fallback interval (2–59 minutes, 10 by default). */
     private fun fallbackMs() = store.load().fallbackMs
@@ -202,7 +212,7 @@ class Controller(private val context: Context) {
         }
         KeepAlive.sync(context, scheduleEnabled())
     }
-    fun keepAlive(value: Boolean) { KeepAlive.set(context, value); refreshSchedule() }
+    fun keepAlive(value: Boolean) { LifeLog.add("USER keepAlive=$value"); KeepAlive.set(context, value); refreshSchedule() }
     /** Fallback alarm: re-arm first so a failed check never breaks the chain, then run a cheap local comparison. */
     fun fallbackTick() {
         if (!scheduleEnabled()) { Wake.disable(context); return }
@@ -222,11 +232,12 @@ class Controller(private val context: Context) {
         // check or cancelled old-network request does not; coalesce those to one follow-up.
         if (!fresh) scheduleCheck("catch-up", policy.debounceMs)
     }
-    fun check() { if (operation?.isActive == true) return; operation = scope.launch { runCheck(true) } }
-    fun checkConnection() { if (operation?.isActive == true) return; operation = scope.launch { runCheck(true, observeOnly = true) } }
+    fun check() { if (operation?.isActive == true) return; LifeLog.add("USER check"); operation = scope.launch { runCheck(true) } }
+    fun checkConnection() { if (operation?.isActive == true) return; LifeLog.add("USER checkConnection"); operation = scope.launch { runCheck(true, observeOnly = true) } }
     fun reviewProtection() { manualPreview.value = null; checkConnection() }
     fun checkDomestic() {
         if (operation?.isActive == true) return
+        LifeLog.add("USER checkDomestic")
         operation = scope.launch {
             if (!gate.tryLock()) return@launch
             val thisRequest = currentCoroutineContext()[Job]
@@ -385,34 +396,63 @@ class Controller(private val context: Context) {
             if (scheduleNow) scheduleCheck("network-check")
         }
     }
-    fun pause(value: Boolean) = edit(scheduleNow = !value) { it.copy(paused = value) }
-    fun runtimeMode(value: RuntimeMode) = edit { it.copy(runtimeMode = value) }
+    fun pause(value: Boolean) = LifeLog.add("USER pause=$value").let { edit(scheduleNow = !value) { it.copy(paused = value) } }
+    fun runtimeMode(value: RuntimeMode) { LifeLog.add("USER runtimeMode=$value"); edit { it.copy(runtimeMode = value) } }
     fun deviceName(value: String) = edit { it.copy(deviceName = value.trim().take(24)) }
     /** edit() re-arms the alarm and the periodic work with the new interval. */
     fun fallbackMinutes(value: Int) = edit { it.copy(fallbackMinutes = FallbackInterval.clamp(value)) }
     /** Labels the slots another device manages; local authority and Po0 are untouched. */
     fun importPeers(peer: PeerLayout) {
+        LifeLog.add("USER import from=${peer.device} slots=${peer.slots.size}")
         var count = 0
         edit(done = { if (count == 0) "没有需要更新的槽位" else "已标注 $count 个槽位" }) {
             PeerImport.apply(it, peer).also { r -> count = r.changed.size }.state
         }
     }
-    fun exportText(): String {
-        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
-        return RedactedExport.build(store.load(), "android", version, System.currentTimeMillis(), lifecycle = LifeLog.recent(600))
+    /** 共享分工 for the user's other devices: unmasked except that the Token is never part of the state. */
+    fun shareText(): String = ShareExport.build(store.load(), "android", updater.version, System.currentTimeMillis())
+
+    /** 调试信息: platform facts, runtime and module status, and the full activity log, addresses cut to /16. */
+    suspend fun debugText(): String {
+        LifeLog.add("USER exportDebug")
+        runCatching { runtime.refresh(store.load()) } // also pulls the module's timeline into the log
+        val s = store.load()
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        val am = context.getSystemService(ActivityManager::class.java)
+        fun granted(permission: String) = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        val module = runtime.module.value
+        val wifi = wifiObservation.value
+        val device = mapOf(
+            "platform" to "android", "app" to updater.version, "versionCode" to runtime.apkVersion.toString(),
+            "android" to Build.VERSION.RELEASE, "sdk" to Build.VERSION.SDK_INT.toString(),
+            "manufacturer" to Build.MANUFACTURER, "model" to Build.MODEL, "rom" to Build.DISPLAY,
+            "batteryExempt" to power.isIgnoringBatteryOptimizations(context.packageName).toString(),
+            "backgroundRestricted" to am.isBackgroundRestricted.toString(), "idle" to power.isDeviceIdleMode.toString(),
+            "keepAlive" to KeepAlive.enabled(context).toString(), "hideRecents" to Recents.hidden(context).toString(),
+            "fineLocation" to granted(Manifest.permission.ACCESS_FINE_LOCATION).toString(),
+            "backgroundLocation" to granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION).toString(),
+            "notifications" to (Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)).toString())
+        val details = mapOf(
+            "network" to networkLabel.value, "networkKey" to currentNetworkKey.value, "busy" to busy.value.toString(),
+            "wifi" to wifi?.let { "${Redact.tag(it.ssid, s.accountContext)}/${Redact.tag(it.bssid, s.accountContext)} ${it.security} available=${it.available}" },
+            "runtimeStatus" to runtime.status.value, "runtimeConnection" to runtime.lastConnection.value, "runtimeResult" to runtime.result.value,
+            "moduleVersion" to module?.let { "${it.versionName} (${it.version})" }, "moduleNetwork" to module?.network,
+            "moduleGateway" to module?.gateway, "routerWan" to module?.wan,
+            "update" to updater.state.value.javaClass.simpleName, "lastExit" to LifeLog.lastExit()?.let { "${java.time.Instant.ofEpochMilli(it.first)} ${it.second}" })
+        return DebugExport.build(s, device, System.currentTimeMillis(), logs = mapOf("lifecycle" to LifeLog.recent()), details = details)
     }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
-    fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
-    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = edit(scheduleNow = true) {
+    fun mode(mode: Mode) { LifeLog.add("USER mode=$mode"); edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) } }
+    fun configureSlot(slot: ManagedSlot, acknowledged: Boolean) = LifeLog.add("USER saveSlot ${slot.number}").let { edit(scheduleNow = true) {
         LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
-    }
+    } }
     // Binding changes what Po0 should hold: drop the local-comparison shortcut and check right away.
-    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = edit(scheduleNow = true) {
+    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = LifeLog.add("USER bindWifi $slot addAp=$addAp").let { edit(scheduleNow = true) {
         val actual = if (it.demo) demoWifi() else wifiObserver.latest
         require(expected.sameIdentity(actual) && (it.demo || wifiObserver.stillMatches(expected))) { "WIFI_UNAVAILABLE" }
         LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp).copy(lastSuccess = 0)
-    }
-    fun revokeWifi(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
+    } }
+    fun revokeWifi(slot: Int) { LifeLog.add("USER revokeWifi $slot"); edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) } }
     fun foreground() {
         LifeLog.add("OPEN")
         updater.check(manual = false) // at most once a day, nothing downloaded without a tap
@@ -428,16 +468,18 @@ class Controller(private val context: Context) {
     } }
     fun previewManual(number: Int) {
         if (busy.value) return
+        LifeLog.add("USER previewManual $number")
         operation = scope.launch {
             manualPreview.value = null
             previewSlot = number
             try { runCheck(true, observeOnly = true) } finally { previewSlot = null }
         }
     }
-    fun cancelManual() { manualPreview.value = null; operation?.cancel() }
+    fun cancelManual() { LifeLog.add("USER cancelManual"); manualPreview.value = null; operation?.cancel() }
     fun confirmManual() {
         val permit = manualPreview.value ?: return
         if (operation?.isActive == true) return
+        LifeLog.add("USER confirmManual ${permit.slot}")
         operation = scope.launch {
             // A server wait still holds; the confirmation expires rather than replaying offline.
             val wait = CheckFlow.confirmWait(store.load(), permit, System.currentTimeMillis())
@@ -448,21 +490,21 @@ class Controller(private val context: Context) {
             finally { busy.value = false; manualPreview.value = null }
         }
     }
-    fun demo(enabled: Boolean) = edit {
+    fun demo(enabled: Boolean) = LifeLog.add("USER demo=$enabled").let { edit {
         // Keep real and simulated credentials separate; discard network/account associations on switching.
         demo = SlotDemoPlatform()
         val base = State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
             nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
             fallbackMinutes = it.fallbackMinutes)
         if (enabled) demoState(base) else base
-    }
-    fun saveToken(value: String) = edit {
+    } }
+    fun saveToken(value: String) = LifeLog.add("USER saveToken").let { edit {
         val next = AccountCredentials.save(store, value, vault::read, vault::save)
         credentialPresent.value = true
         next
-    }
-    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
-    fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
+    } }
+    fun clearToken() = LifeLog.add("USER clearToken").let { edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty } }
+    fun clearHistory() = LifeLog.add("USER clearHistory").let { edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") } }
     private fun demoWifi(): WifiObservation? = when (demoScenario) {
         0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())
         3 -> WifiObservation("demo", "Example Office", "02:11:22:33:44:02", WifiSecurity.WPA3, System.currentTimeMillis())

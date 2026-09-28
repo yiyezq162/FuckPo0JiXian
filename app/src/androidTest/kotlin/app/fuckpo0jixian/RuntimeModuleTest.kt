@@ -54,7 +54,12 @@ class RuntimeModuleTest {
         val wifi = android.provider.Settings.Global.getInt(rule.activity.contentResolver, "wifi_on", 0)
         val count = NetworkTransport.requests.get()
         val deepEnabled = shell("dumpsys deviceidle enabled deep").trim() == "1"
+        // The helper exempts the app from battery optimization once ready, and an exempt app keeps network in Doze;
+        // this test is about the app that is not exempt.
+        Thread.sleep(3000)
+        val exempt = shell("dumpsys deviceidle whitelist").contains("app.fuckpo0jixian")
         try {
+            shell("dumpsys deviceidle whitelist -app.fuckpo0jixian")
             if (!deepEnabled) shell("dumpsys deviceidle enable deep")
             shell("dumpsys deviceidle force-idle deep")
             check(shell("dumpsys deviceidle get deep").trim() == "IDLE")
@@ -68,6 +73,7 @@ class RuntimeModuleTest {
         } finally {
             shell("dumpsys deviceidle unforce")
             if (!deepEnabled) shell("dumpsys deviceidle disable deep")
+            if (exempt) shell("dumpsys deviceidle whitelist +app.fuckpo0jixian")
             shell(if (wifi == 0) "svc wifi disable" else "svc wifi enable")
             rule.runOnUiThread { c.store.save(State()) }
             runBlocking { c.runtime.publish(State()) }

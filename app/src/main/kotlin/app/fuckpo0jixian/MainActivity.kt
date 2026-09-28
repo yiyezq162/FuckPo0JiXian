@@ -44,6 +44,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -318,4 +319,36 @@ private fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>, 
             AlertAction("取消") { confirm = false },
             AlertAction("清空", destructive = true) { c.clearHistory(); confirm = false }))
     }
+    item(key = "rec-debug") { DebugExportSection(c) }
+}
+
+/** Last on the records page: the detailed log for troubleshooting, addresses cut to /16. */
+@Composable private fun DebugExportSection(c: Controller) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    fun deliver(share: Boolean) {
+        open = false; working = true
+        scope.launch {
+            try {
+                val text = c.debugText()
+                if (share) context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, text)
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "去他妈的鸡险 · 调试信息"), "导出调试信息"))
+                else {
+                    context.getSystemService(android.content.ClipboardManager::class.java)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("FuckPo0JiXian", text))
+                    c.feedback.value = "已复制调试信息"
+                }
+            } finally { working = false }
+        }
+    }
+    Section(footer = "包含详细的运行记录，便于排查问题。IP 只保留前两段，不含 Token。") {
+        ActionRow("导出调试信息", loading = working) { open = true }
+    }
+    if (open) IosAlert("导出调试信息", { open = false },
+        message = "包含设置、每次检查与网络变化、模块记录等运行细节。IP 只保留前两段，Wi-Fi 名称以标记代替，不含 Token。",
+        actions = listOf(AlertAction("分享", preferred = true) { deliver(true) }, AlertAction("复制") { deliver(false) },
+            AlertAction("取消") { open = false }))
 }

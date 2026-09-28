@@ -74,7 +74,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     val state by c.updater.state.collectAsState()
     val colors = Apple.colors
     Section(header = "关于", inset = 58.dp, footer = "Token 与配置只保存在本机，不会备份或上传。" +
-        if (s.runtimeMode == RuntimeMode.MODULE) "模块需在 Magisk / KernelSU 中另行更新。" else "") {
+        if (s.runtimeMode == RuntimeMode.MODULE) "更新应用后，可在「运行模式」中一键更新模块。" else "") {
         ListRow("版本", value = c.updater.version, leading = { IconTile(Icons.Rounded.Info, colors.gray) })
         when (val u = state) {
             is UpdateState.Available -> {
@@ -138,27 +138,60 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
 @Composable private fun RuntimeSection(s: State, c: Controller, busy: Boolean) {
     val status by c.runtime.status.collectAsState()
     val checkedAt by c.runtime.checkedAt.collectAsState()
+    val module by c.runtime.module.collectAsState()
     var details by remember { mutableStateOf(false) }
+    // null: hidden; false: install; true: update an older module.
+    var sheet by remember { mutableStateOf<Boolean?>(null) }
+    val outdated = module?.outdated(c.runtime.apkVersion) == true
     LaunchedEffect(s.runtimeMode, s.paused) {
         while (true) { c.refreshRuntime(); kotlinx.coroutines.delay(30_000) }
     }
+    fun offer(update: Boolean) { c.moduleInstaller.reset(); sheet = update }
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Section(header = "运行模式", footer = "一般保持标准模式即可。模块增强需要 root，仅用于在后台更及时地触发检查。") {
             CheckRow("标准模式", s.runtimeMode == RuntimeMode.STANDARD, subtitle = "无需 root", enabled = !busy) { c.runtimeMode(RuntimeMode.STANDARD) }
-            CheckRow("模块增强", s.runtimeMode == RuntimeMode.MODULE, subtitle = "Magisk / KernelSU", enabled = !busy) { c.runtimeMode(RuntimeMode.MODULE) }
+            CheckRow("模块增强", s.runtimeMode == RuntimeMode.MODULE, subtitle = "Magisk / KernelSU", enabled = !busy) {
+                // An installed module works even when older, so switch and suggest the update; without one, offer to install.
+                if (module != null) { c.runtimeMode(RuntimeMode.MODULE); if (outdated) offer(update = true) } else offer(update = false)
+            }
         }
-        Section(footer = if (details) "先安装同版本 APK，再在 Magisk / KernelSU 中安装对应模块，首次解锁后生效。" +
-            "模块不保存 Token，也不保证常驻；小米 HyperOS 需允许本应用自启动。要停用，请在管理器中禁用模块或切回标准模式。" else null) {
+        Section(footer = if (details) "模块会监听底层网络与路由器出口（仅局域网查询），并让本应用免于电池优化。" +
+            "它不保存 Token，也不保证常驻；小米 HyperOS 需允许本应用自启动。要停用，请切回标准模式，或在管理器中禁用模块。" else null) {
             ListRow("状态", subtitle = status, value = if (checkedAt > 0) time(checkedAt) else null)
+            if (s.runtimeMode == RuntimeMode.MODULE && outdated) {
+                ListRow("模块有新版本", subtitle = "当前 ${module?.versionName ?: "旧版"}，与应用 ${c.updater.version} 配套的版本可用",
+                    titleColor = Apple.colors.orange)
+                ActionRow("更新模块") { offer(update = true) }
+            }
+            module?.wan?.let { wan -> ListRow("路由器出口", subtitle = gatewayText(module?.gateway), value = wan) }
             ListRow("诊断与安装说明", chevron = !details, leading = null) { c.refreshRuntime(); details = !details }
             if (details) {
                 val lastConnection by c.runtime.lastConnection.collectAsState()
                 val result by c.runtime.result.collectAsState()
+                ListRow("模块版本", value = module?.versionName ?: "未连接")
+                if (module?.wan == null && module != null) ListRow("路由器出口", value = gatewayText(module?.gateway))
                 ListRow("最近连接", subtitle = readableEvidence(lastConnection))
                 ListRow("最近结果", subtitle = readableEvidence(result))
+                ActionRow(if (module == null) "安装模块" else "重新安装模块") { offer(update = module != null) }
             }
         }
     }
+    sheet?.let { update ->
+        ModuleSheet(c, update, onDismiss = { sheet = null }) {
+            if (s.runtimeMode != RuntimeMode.MODULE) c.runtimeMode(RuntimeMode.MODULE)
+            c.moduleInstaller.install()
+        }
+    }
+}
+
+/** How the module reads the router's WAN address, in words. */
+private fun gatewayText(status: String?) = when (status) {
+    "NATPMP" -> "经 NAT-PMP 读取"; "UPNP" -> "经 UPnP 读取"
+    "NATPMP_PRIVATE", "UPNP_PRIVATE" -> "路由器处于另一层 NAT 之后"
+    "UNSUPPORTED" -> "路由器未开启 UPnP / NAT-PMP"
+    "DISCOVERING" -> "正在查找路由器"
+    "OFF" -> "连接 Wi-Fi 时读取"
+    else -> "模块版本较旧，暂不支持"
 }
 
 /** Standard mode depends on the system letting the app wake up; these are the switches that decide it. */
@@ -210,28 +243,28 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
     var peer by remember { mutableStateOf<PeerLayout?>(null) }
     var export by remember { mutableStateOf(false) }
     var screenshots by remember { mutableStateOf(Screenshots.allowed(context)) }
-    Section(header = "多设备", footer = "每台设备只授权自己负责的槽位。导入其他设备的导出数据，只会标注它管理的槽位，不会授权或写入。") {
+    Section(header = "多设备", footer = "每台设备只授权自己负责的槽位。导入其他设备的分工，只会标注它管理的槽位，不会授权或写入。") {
         ListRow("本机名称", value = s.deviceName.ifBlank { "未设置" }, chevron = true, enabled = !busy) { rename = true }
         ActionRow("从剪贴板导入其他设备的分工", enabled = !busy && s.snapshot != null) {
             val text = context.getSystemService(ClipboardManager::class.java).primaryClip?.takeIf { it.itemCount > 0 }
                 ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
             runCatching { PeerImport.parse(text) }.onSuccess { peer = it }.onFailure { c.feedback.value = statusText("IMPORT_INVALID") }
         }
-        ActionRow("导出脱敏数据") { export = true }
+        ActionRow("导出本机分工") { export = true }
         ToggleRow("允许截图", screenshots, { value -> (context as? android.app.Activity)?.let { screenshots = value; Screenshots.set(it, value) } },
             subtitle = "截图会包含 IP 和槽位，分享前请检查")
     }
-    if (export) IosAlert("导出脱敏数据", { export = false },
-        message = "Token 已去除，账户标识、Wi-Fi 名称和接入点不导出；IP 只保留前两段（如 203.0.*.0/24）。可用于复盘，也可在其他设备上导入分工。",
+    if (export) IosAlert("导出本机分工", { export = false },
+        message = "包含 IP 段、本机名称、槽位绑定的 Wi-Fi 名称和接入点，不含 Token。用于在自己的其他设备上导入，请勿公开发布。",
         actions = listOf(
             AlertAction("分享", preferred = true) {
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.exportText())
-                    .putExtra(Intent.EXTRA_SUBJECT, "去他妈的鸡险 · 脱敏数据")
-                context.startActivity(Intent.createChooser(send, "导出脱敏数据")); export = false
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.shareText())
+                    .putExtra(Intent.EXTRA_SUBJECT, "去他妈的鸡险 · ${s.deviceName.ifBlank { "本机" }}的分工")
+                context.startActivity(Intent.createChooser(send, "导出本机分工")); export = false
             },
             AlertAction("复制") {
-                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("FuckPo0JiXian", c.exportText()))
-                c.feedback.value = "已复制脱敏数据"; export = false
+                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("FuckPo0JiXian", c.shareText()))
+                c.feedback.value = "已复制本机分工"; export = false
             },
             AlertAction("取消") { export = false }))
     if (rename) {

@@ -38,6 +38,8 @@ object Updates {
     const val AUTO_INTERVAL_MS = 24 * 3_600_000L
 
     fun androidAsset(version: String) = "FuckPo0JiXian-$version.apk"
+    /** The Magisk / KernelSU module released together with the APK of the same version. */
+    fun runtimeAsset(version: String) = "FuckPo0JiXian-Runtime-$version.zip"
     /** platform: macos / windows; arch: arm64 / x64; ext: dmg / msi. */
     fun desktopAsset(version: String, platform: String, arch: String, ext: String) =
         "FuckPo0JiXian-Desktop-$version-$platform-$arch.$ext"
@@ -83,6 +85,14 @@ object Updates {
         .sortedWith { x, y -> if (newer(x.version, y.version)) -1 else if (newer(y.version, x.version)) 1 else 0 }
         .firstNotNullOfOrNull { r -> r.assets.find { it.name == assetName(r.version) }?.let { Update(r, it) } }
 
+    /**
+     * The release of exactly [version] carrying [assetName]'s file: the module must match the installed APK, so a
+     * newer release is no substitute. Null for dev builds and unpublished (draft) releases.
+     */
+    fun exact(releases: List<Release>, version: String, assetName: (String) -> String): Update? =
+        releases.firstOrNull { it.version == version.trim().removePrefix("v") }
+            ?.let { r -> r.assets.find { it.name == assetName(r.version) }?.let { Update(r, it) } }
+
     /** "hash  name" lines as written by shasum / sha256sum. */
     fun checksum(sums: String, name: String): String? = sums.lines().map { it.trim().split(Regex("\\s+\\*?"), limit = 2) }
         .firstOrNull { it.size == 2 && it[1] == name && it[0].matches(Regex("[0-9a-fA-F]{64}")) }?.get(0)?.lowercase()
@@ -116,6 +126,7 @@ class UpdateClient(private val userAgent: String,
     }
 
     fun check(current: String, assetName: (String) -> String): Update? = Updates.pick(releases(), current, assetName)
+    fun find(version: String, assetName: (String) -> String): Update? = Updates.exact(releases(), version, assetName)
 
     fun releases(): List<Release> {
         val c = connect(Updates.API, "application/vnd.github+json")

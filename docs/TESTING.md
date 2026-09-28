@@ -1,3 +1,10 @@
+# 0.8.6-preview 模块联动与导出拆分验证（2026-09-29）
+
+- 核心 / 桌面：core 120 项、desktop 36 项通过（2 项平台专用跳过）。新增 `Redact`、`ShareExport`、`DebugExport`、`StateDiff` 与按版本查找模块的测试；0.8.5 及更早的脱敏导出仍可导入。
+- Android：Debug / Preview / AndroidTest 构建与 Preview Lint 通过；`emulator-5580` 常规套件 26 项通过，截图含新的模块安装弹窗。模拟器上发现 ICU 正则不接受 `[:-]`（JVM 测试查不出），已修正。
+- 模块：root 模拟器上手动运行新 helper，`RuntimeModuleTest` 5 项通过（深度休眠测试先移除 helper 加入的电池优化白名单）。日志中可见底层网络事件、唤起与认领、IP 截为 /16；三条保活命令均返回 0；模拟器路由器不支持 NAT-PMP / UPnP，按预期停用并 30 分钟后重试。
+- 未验证：真实路由器的 NAT-PMP / UPnP 出口读取与宽带重拨、熄屏 10 分钟后亮屏触发、KernelSU / Magisk 管理器实际打开 zip、`updateJson` 自动更新、真机耗电。未访问真实 Po0 账户。
+
 # 0.8.5-preview 图标与程序坞（2026-09-28）
 
 - 新图标：三端统一为一只简约小鸡（源图 `art/icon.svg`）。Android 改用矢量图层，并提供主题图标用的单色层；通知栏也换成小鸡剪影。桌面各尺寸由 `scripts/render-icons.sh` 生成。

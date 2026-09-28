@@ -16,7 +16,13 @@ import java.io.DataOutputStream
 import java.io.File
 import java.util.UUID
 
-/** No su requests, credentials, network addresses or arbitrary commands on this channel. */
+/** What the helper reported about itself at the last handshake (INFO); null fields come from older modules. */
+data class ModuleInfo(val version: Long?, val versionName: String?, val network: String?, val gateway: String?, val wan: String?) {
+    /** Older than this APK: the module release matching this APK has fixes or features it lacks. */
+    fun outdated(apkVersion: Long) = version == null || version < apkVersion
+}
+
+/** No su requests, credentials or arbitrary commands on this channel; the helper only shares what it observed. */
 class RuntimeBridge(private val context: Context, private val bootCount: Int = runCatching {
     android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT)
 }.getOrDefault(-1)) {
@@ -38,6 +44,10 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
             " · " + data.getString("text")
     }.getOrDefault(empty)
     val result = MutableStateFlow(history(receipt, "尚无增强请求完成证据"))
+    /** Latest helper self-report; null when no helper answered. */
+    val module = MutableStateFlow<ModuleInfo?>(null)
+    val apkVersion: Long = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode }.getOrDefault(0)
+    private val eventPrefs = context.getSharedPreferences("module_events", Context.MODE_PRIVATE)
     val lastConnection = MutableStateFlow(history(observation, "本次开机尚无已验证的 helper 报告"))
     private fun writeEvidence(target: AtomicFile, data: JSONObject) {
         val out = target.startWrite()
@@ -52,12 +62,14 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
         val bytes = JSONObject().put("protocol", RuntimePolicy.PROTOCOL).put("instance", instance)
             .put("gate", gate).put("generation", generation)
             .put("enabled", RuntimePolicy.enabled(s)).put("fallbackMinutes", FallbackInterval.clamp(s.fallbackMinutes))
+            // Module mode asks the root helper to keep this app exempt from battery optimization (see module README).
+            .put("keepAlive", true)
             .toString().toByteArray()
         val out = file.startWrite()
         try { out.write(bytes); file.finishWrite(out) } catch (e: Exception) { file.failWrite(out); throw e }
         refresh(s)
     } }
-    suspend fun exchange(action: String, ticket: String = ""): String? = withContext(Dispatchers.IO) {
+    suspend fun exchange(action: String, ticket: String = "", limit: Int = 2048): String? = withContext(Dispatchers.IO) {
         runCatching {
             LocalSocket().use { socket ->
                 socket.connect(LocalSocketAddress("fuckpo0jixian.runtime.v1", LocalSocketAddress.Namespace.ABSTRACT))
@@ -65,12 +77,18 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
                 check(socket.peerCredentials.uid == 0) // A different app cannot impersonate the helper.
                 val output = DataOutputStream(socket.outputStream)
                 output.writeUTF("1"); output.writeUTF(action); output.writeUTF(instance); output.writeUTF(ticket); output.flush()
-                DataInputStream(socket.inputStream).readUTF().take(2048)
+                DataInputStream(socket.inputStream).readUTF().take(limit)
             }
         }.onFailure { android.util.Log.w("FuckPo0JiXianRuntime", "IPC_" + it.javaClass.simpleName) }.getOrNull()
     }
     suspend fun refresh(s: State) = withContext(Dispatchers.IO) { evidenceLock.withLock {
         val info = exchange("INFO")?.let { runCatching { JSONObject(it) }.getOrNull() }
+        module.value = info?.let {
+            ModuleInfo(it.optLong("version", -1).takeIf { v -> v >= 0 }, it.optString("versionName").ifBlank { null },
+                it.optString("network").ifBlank { null }, it.optString("gateway").ifBlank { null },
+                it.optString("wan").takeIf { w -> w.isNotBlank() && w != "null" })
+        }
+        if (info != null) pullEvents(info)
         val sameBoot = info != null && bootCount >= 0 && info.optInt("boot", -1) == bootCount
         val reply = if (info == null) exchange("STATUS") else if (!sameBoot) "BOOT_UNKNOWN" else info.optString("status")
         val seenThisBoot = bootCount >= 0 && runCatching {
@@ -89,6 +107,23 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
             if (idle && state in setOf("READY", "ACTIVE")) "DOZE" else state)
         checkedAt.value = System.currentTimeMillis()
     } }
+    /**
+     * Copies the helper's in-memory timeline into the lifecycle log (addresses cut to /16 there). The helper numbers
+     * its lines from 1 each time it starts, so the position is kept per helper start.
+     */
+    private suspend fun pullEvents(info: JSONObject) {
+        val origin = "${info.optInt("boot", -1)}:${info.optLong("startedMs", -1)}"
+        val since = if (eventPrefs.getString("origin", null) == origin) eventPrefs.getLong("seq", 0) else 0
+        val reply = exchange("EVENTS", since.toString(), limit = 65_535)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
+        val lines = reply.optJSONArray("lines") ?: return
+        for (i in 0 until lines.length()) {
+            val parts = lines.optString(i).split(' ', limit = 3)
+            val at = parts.getOrNull(1)?.toLongOrNull() ?: continue
+            LifeLog.add("MODULE ${parts.getOrElse(2) { "" }}", at)
+        }
+        eventPrefs.edit().putString("origin", origin).putLong("seq", reply.optLong("seq", since)).apply()
+    }
+
     suspend fun claim(ticket: String): String? = exchange("CLAIM", ticket)?.takeIf {
         it.matches(Regex("CHECK:[a-f0-9-]{36}"))
     }?.removePrefix("CHECK:")

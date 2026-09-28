@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared with the root manager only: the verified module zip, see ModuleInstaller. -->
+<paths>
+    <cache-path name="module" path="module/" />
+</paths>

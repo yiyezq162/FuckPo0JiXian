@@ -348,7 +348,21 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             }
         }
     }
+    var debug by remember { mutableStateOf(false) }
+    Group("调试", footer = "包含详细的运行记录，便于排查问题。IP 只保留前两段，路由器以标记代替，不含 Token。") {
+        SettingRow("导出调试信息", subtitle = "设置、每次检查、网络变化与请求记录", icon = Glyph.Download, iconTint = colors.gray,
+            onClick = { debug = true })
+    }
     Row { Button("清空记录", { confirm = true }, ButtonKind.DESTRUCTIVE) }
+    if (debug) Alert("导出调试信息", { debug = false },
+        message = "包含设置、每次检查与网络变化等运行细节。IP 只保留前两段，路由器以标记代替，不含 Token。",
+        actions = listOf(
+            DialogAction("复制", preferred = true) {
+                Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(c.debugText()), null)
+                c.feedback.value = "已复制调试信息"; debug = false
+            },
+            DialogAction("保存为文件") { debug = false; saveText("导出调试信息", "FuckPo0JiXian-调试信息.json", c.debugText(), c) },
+            DialogAction("取消") { debug = false }))
     if (confirm) Alert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。",
         actions = listOf(DialogAction("清空", destructive = true) { c.clearHistory(); confirm = false }, DialogAction("取消") { confirm = false }))
 }
@@ -404,12 +418,12 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             Icon(Glyph.Chevron, null, tint = colors.tertiary, modifier = Modifier.size(16.dp))
         }
         Divider(48.dp)
-        SettingRow("导入其他设备的分工", subtitle = "读取剪贴板中的脱敏数据", icon = Glyph.Devices, iconTint = colors.indigo, enabled = !busy && s.snapshot != null, onClick = {
+        SettingRow("导入其他设备的分工", subtitle = "读取剪贴板中其他设备导出的分工", icon = Glyph.Devices, iconTint = colors.indigo, enabled = !busy && s.snapshot != null, onClick = {
             val text = runCatching { Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as String }.getOrDefault("")
             runCatching { PeerImport.parse(text) }.onSuccess { peer = it }.onFailure { c.feedback.value = statusText("IMPORT_INVALID") }
         })
         Divider(48.dp)
-        SettingRow("导出脱敏数据", subtitle = "用于复盘，或在其他设备导入", icon = Glyph.Download, iconTint = colors.green, onClick = { export = true })
+        SettingRow("导出本机分工", subtitle = "在自己的其他设备上导入", icon = Glyph.Download, iconTint = colors.green, onClick = { export = true })
     }
     Group("通用") {
         ToggleRow("开机启动", autostart, { Autostart.set(it); autostart = Autostart.enabled() }, icon = Glyph.Power, iconTint = colors.gray,
@@ -442,18 +456,16 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             actions = listOf(DialogAction("保存", preferred = true, enabled = input.isNotBlank()) { c.deviceName(input); rename = false },
                 DialogAction("取消") { rename = false }))
     }
-    if (export) Alert("导出脱敏数据", { export = false },
-        message = "不含 Token、账户标识、网络和路由器信息；IP 只保留前两段。",
+    if (export) Alert("导出本机分工", { export = false },
+        message = "包含 IP 段、本机名称和槽位绑定的路由器，不含 Token。用于在自己的其他设备上导入，请勿公开发布。",
         actions = listOf(
             DialogAction("复制", preferred = true) {
-                Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(c.exportText()), null)
-                c.feedback.value = "已复制脱敏数据"; export = false
+                Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(c.shareText()), null)
+                c.feedback.value = "已复制本机分工"; export = false
             },
             DialogAction("保存为文件") {
                 export = false
-                val dialog = FileDialog(null as Frame?, "导出脱敏数据", FileDialog.SAVE).apply { file = "FuckPo0JiXian-脱敏数据.json"; isVisible = true }
-                if (dialog.file != null) runCatching { File(dialog.directory, dialog.file).writeText(c.exportText()) }
-                    .onSuccess { c.feedback.value = "已保存" }.onFailure { c.feedback.value = "保存失败" }
+                saveText("导出本机分工", "FuckPo0JiXian-${s.deviceName.ifBlank { "本机" }}的分工.json", c.shareText(), c)
             },
             DialogAction("取消") { export = false }))
     peer?.let { p ->
@@ -506,4 +518,11 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             "3 分钟内有效，执行前会再次核对。", actions = listOf(DialogAction("确认更新", preferred = true, enabled = !busy, onClick = c::confirmManual),
             DialogAction("取消", onClick = c::cancelManual)))
     }
+}
+
+/** Asks where to save [text]; reports the outcome in the toast. */
+private fun saveText(title: String, name: String, text: String, c: DesktopController) {
+    val dialog = FileDialog(null as Frame?, title, FileDialog.SAVE).apply { file = name; isVisible = true }
+    if (dialog.file != null) runCatching { File(dialog.directory, dialog.file).writeText(text) }
+        .onSuccess { c.feedback.value = "已保存" }.onFailure { c.feedback.value = "保存失败" }
 }

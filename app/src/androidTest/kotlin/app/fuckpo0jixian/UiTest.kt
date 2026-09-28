@@ -19,7 +19,14 @@ class UiTest {
         rule.runOnUiThread { controller.store.save(original) }
         rule.onNodeWithTag("tab-2").performClick()
         rule.onNodeWithTag("page-list").performScrollToNode(hasText("模块增强"))
+        // No module here: picking it offers the install first, and 取消 leaves the mode alone.
         rule.onNodeWithText("模块增强").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("module-sheet").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("模块仅适用于已 root 的设备", substring = true).assertExists()
+        rule.onAllNodesWithText("取消").onLast().performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("module-sheet").fetchSemanticsNodes().isEmpty() }
+        assertEquals(RuntimeMode.STANDARD, controller.store.load().runtimeMode)
+        rule.runOnUiThread { controller.runtimeMode(RuntimeMode.MODULE) }
         rule.waitUntil { controller.store.load().runtimeMode == RuntimeMode.MODULE }
         assertEquals(original, LocalStore(rule.activity).load().copy(runtimeMode = RuntimeMode.STANDARD))
         rule.onNode(hasText("模块增强") and isSelected()).assertExists()

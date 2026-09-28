@@ -9,6 +9,9 @@ test -n "$VERSION"
 test "$(sed -n 's/^version=//p' module/module.prop)" = "$VERSION" || { echo "module/module.prop version != $VERSION" >&2; exit 1; }
 CODE=$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts)
 test "$(sed -n 's/^versionCode=//p' module/module.prop)" = "$CODE" || { echo "module/module.prop versionCode != $CODE" >&2; exit 1; }
+# Root managers read module/update.json on main (module.prop updateJson) to offer this release's module.
+grep -q "\"version\": \"$VERSION\"" module/update.json && grep -q "\"versionCode\": $CODE," module/update.json &&
+  grep -q "/v$VERSION/FuckPo0JiXian-Runtime-$VERSION.zip\"" module/update.json || { echo "module/update.json does not match $VERSION ($CODE)" >&2; exit 1; }
 mkdir -p dist
 test -f app/build/outputs/apk/preview/app-preview.apk
 # No debug APK here: it is debuggable, so one signed like the release could expose an installed app's data.

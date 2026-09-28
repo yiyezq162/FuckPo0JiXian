@@ -132,12 +132,13 @@ class MultiDeviceTest {
         assertEquals("UNKNOWN_WIFI", check(st, f, lan.copy(bssid = "a4:11:22:33:44:66", time = clock), "lan"))
     }
 
-    @Test fun exportIsRedactedAndRoundTripsIntoPeerLabels() {
+    @Test fun shareExportKeepsTheDivisionAndRoundTripsIntoPeerLabels() {
         val s = state(shared = true).copy(deviceName = "Mac", domesticExit = DomesticExit("192.0.2.77", clock, "n"),
             events = listOf(Event(clock, "SLOT_UPDATED")), observations = listOf(Observation(clock, home, "wifi")))
-        val text = RedactedExport.build(s, "macos", "0.7.0", clock)
-        listOf("192.0.2.", "198.51.100.", "203.0.113.", "Home\"", ap, "\"a\"", "pgnfw_").forEach { assertFalse(it in text, "leaked $it") }
-        assertTrue("192.0.*.0/24" in text)
+        val text = ShareExport.build(s, "macos", "0.7.0", clock)
+        // Only for the user's own devices: ranges, Wi-Fi name and access point stay; the host part and account do not.
+        listOf("192.0.2.0/24", "198.51.100.0/24", "\"Home\"", ap, "\"Mac\"").forEach { assertTrue(it in text, "missing $it") }
+        listOf("192.0.2.77", "\"a\"", "pgnfw_").forEach { assertFalse(it in text, "leaked $it") }
 
         val phoneState = State(deviceName = "手机", snapshot = s.snapshot, layout = SlotLayout(slots = listOf(
             ManagedSlot(2, "这台手机", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, authorized = true, baseline = phone))))
@@ -152,6 +153,43 @@ class MultiDeviceTest {
         assertEquals("IMPORT_SAME_DEVICE", assertFailsWith<IllegalArgumentException> {
             PeerImport.apply(phoneState.copy(deviceName = "mac"), PeerImport.parse(text)) }.message)
         assertEquals("IMPORT_INVALID", assertFailsWith<IllegalArgumentException> { PeerImport.parse("{}") }.message)
+        assertEquals("IMPORT_INVALID", assertFailsWith<IllegalArgumentException> {
+            PeerImport.parse(DebugExport.build(s, mapOf("platform" to "macos"), clock)) }.message, "debug info is not a division")
+    }
+
+    @Test fun olderRedactedExportsStillImport() {
+        val legacy = """{"format":"fuckpo0jixian-export","version":1,"device":{"name":"旧 Mac"},
+            "slots":[{"number":1,"name":"公司","purpose":"FIXED","writer":"LOCAL","owner":""}]}"""
+        val peer = PeerImport.parse(legacy)
+        assertEquals("旧 Mac", peer.device); assertEquals(Writer.LOCAL, peer.slots.single().writer)
+    }
+
+    @Test fun debugExportMasksAddressesAndWifiButKeepsNames() {
+        val s = state(shared = true).copy(deviceName = "Mac", domesticExit = DomesticExit("192.0.2.77", clock, "n"),
+            events = listOf(Event(clock, "SLOT_UPDATED")), observations = listOf(Observation(clock, home, "wifi")))
+        val text = DebugExport.build(s, mapOf("platform" to "macos", "app" to "0.8.6"), clock,
+            logs = mapOf("lifecycle" to listOf("2026-09-28T03:10:00Z NET wifi addrs=192.168.31.20 v6=2408:8207:1a2b:3c4d::/64 gw=a4:11:22:33:44:55")))
+        listOf("192.0.2.", "198.51.100.", "203.0.113.", "192.168.31", "\"Home\"", ap, "a4:11:22:33:44:55", "1a2b:3c4d", "pgnfw_")
+            .forEach { assertFalse(it in text, "leaked $it") }
+        listOf("192.0.*.*/24", "192.0.*.*", "192.168.*.*", "2408:8207:*", "03:10:00", "\"Mac\"", "\"家\"", "0.8.6", "SLOT_UPDATED")
+            .forEach { assertTrue(it in text, "missing $it") }
+        val tag = Redact.tag("Home", s.accountContext)!!
+        assertTrue(tag in text); assertEquals(tag, Redact.tag("Home", s.accountContext)); assertNotEquals(tag, Redact.tag("Home", "other"))
+    }
+
+    @Test fun stateDiffNamesWhatChanged() {
+        val before = state(shared = true)
+        val after = before.copy(status = "SLOT_UPDATED", snapshot = snap(newHome, listOf(Entry(newHome, 0), Entry(office, 1), Entry(phone, 2))),
+            layout = before.layout!!.copy(slots = before.layout!!.slots.map { if (it.number == 0) it.copy(baseline = newHome) else it }),
+            events = listOf(Event(clock, "SLOT_UPDATED")), runtimeMode = RuntimeMode.MODULE)
+        val lines = StateDiff.describe(before, after)
+        assertTrue("RUNTIME MODULE" in lines)
+        assertTrue("STATUS NOT_CHECKED -> SLOT_UPDATED" in lines)
+        assertTrue("PO0_SEES 198.18.1.0/24" in lines)
+        assertTrue("WHITELIST slot=0 192.0.2.0/24 -> 198.18.1.0/24" in lines)
+        assertTrue("SLOT 0 baseline=198.18.1.0/24" in lines)
+        assertTrue("EVENT SLOT_UPDATED" in lines)
+        assertTrue(StateDiff.describe(after, after).isEmpty())
     }
 
     @Test fun newFieldsSurviveTheStateCodecAndOldFilesDefault() {
