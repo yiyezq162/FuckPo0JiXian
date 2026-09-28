@@ -100,4 +100,15 @@ class UpdatesTest {
             assertNotNull(client.check("0.7.0-preview") { Updates.desktopAsset(it, pa.first, pa.second, ext) }, "$pa installer in the release")
         }
     }
+    @Test fun finalReleaseIsNewerThanItsPreviewButNotTheOtherWayRound() {
+        assertTrue(Updates.newer("0.8.3", "0.8.3-preview"))
+        assertFalse(Updates.newer("0.8.3-preview", "0.8.3"))
+        assertFalse(Updates.newer("0.8.3-beta", "0.8.3-preview"))
+        assertFalse(Updates.newer("0.8.3", "0.8.3"))
+        assertTrue(Updates.newer("0.8.4-preview", "0.8.3"))
+        val releases = listOf(Release("0.8.3", "", "", listOf(ReleaseAsset("a-0.8.3", "u", 1))),
+            Release("0.8.3-preview", "", "", listOf(ReleaseAsset("a-0.8.3-preview", "u", 1))))
+        assertEquals("0.8.3", Updates.pick(releases, "0.8.3-preview") { "a-$it" }?.version)
+        assertEquals("0.8.3", Updates.pick(releases.reversed(), "0.8.2") { "a-$it" }?.version)
+    }
 }

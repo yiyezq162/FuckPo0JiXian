@@ -15,13 +15,13 @@ object StateCodec {
     fun encode(s: State): String = buildJsonObject {
         put("version", 2); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
         put("accountContext", s.accountContext); put("globalBlock", s.globalBlock)
-        put("serverNotBefore", s.serverNotBefore)
+        put("serverNotBefore", s.serverNotBefore); put("endpoint", s.endpoint)
         put("layout", s.layout?.let(LayoutCodec::encode) ?: JsonNull)
         put("runtimeMode", s.runtimeMode.name); put("deviceName", s.deviceName); put("fallbackMinutes", s.fallbackMinutes)
-        put("fixed", s.budget.fixed); put("mobile", s.budget.mobile)
+        // Retired fields, still written empty: earlier releases require them to read this file.
+        put("fixed", 0); put("mobile", 0); putJsonArray("profiles") {}; putJsonArray("ownership") {}; put("activeProfileId", JsonNull)
         put("lastCheck", s.lastCheck); put("lastSuccess", s.lastSuccess); put("nextAllowed", s.nextAllowed)
         put("failures", s.failures); put("authBlocked", s.authBlocked); put("networkKey", s.networkKey); put("status", s.status)
-        put("activeProfileId", s.activeProfileId)
         put("slotPlan", s.slotPlan?.let { p -> buildJsonObject {
             put("home", p.home.value); put("homeSlot", p.homeSlot); put("mobileSlot", p.mobileSlot)
             put("homeReady", p.homeReady); put("lastMobile", p.lastMobile?.value); put("pendingMobile", p.pendingMobile?.value)
@@ -31,12 +31,6 @@ object StateCodec {
             put("ipv4", d.ipv4); put("time", d.time); put("networkKey", d.networkKey); put("source", d.source.name)
         } } ?: JsonNull)
         put("snapshot", s.snapshot?.let(::snapshot) ?: JsonNull)
-        putJsonArray("profiles") { s.profiles.forEach { p -> add(buildJsonObject {
-            put("id", p.id); put("name", p.name); put("kind", p.kind.name); put("cidr", p.cidr?.value); put("hint", p.networkHint)
-        }) } }
-        putJsonArray("ownership") { s.ownership.forEach { o -> add(buildJsonObject {
-            put("cidr", o.cidr.value); put("authorized", o.authorized); put("protected", o.protected); put("used", o.lastUsed)
-        }) } }
         putJsonArray("observations") { s.observations.forEach { o -> add(buildJsonObject {
             put("time", o.time); put("cidr", o.cidr.value); put("kind", o.networkKind)
         }) } }
@@ -51,25 +45,25 @@ object StateCodec {
                 val e = it.jsonObject; Entry(Cidr(e.s("cidr")), e.optional("slot")?.toInt())
             }, v.l("capacity").toInt(), v.optional("revision"))
         }
-        val state = State(Mode.valueOf(o.s("mode")), o.b("paused"), o.b("demo"), Budget(o.l("fixed").toInt(), o.l("mobile").toInt()),
-            o.getValue("profiles").jsonArray.map { it.jsonObject.let { p -> Profile(p.s("id"), p.s("name"), Kind.valueOf(p.s("kind")), p.optional("cidr")?.let(::Cidr), p.optional("hint")) } },
-            o.getValue("ownership").jsonArray.map { it.jsonObject.let { v -> Ownership(Cidr(v.s("cidr")), v.b("authorized"), v.b("protected"), v.l("used")) } },
-            snap, o.l("lastCheck"), o.l("lastSuccess"), o.l("nextAllowed"), o.l("failures").toInt(), o.b("authBlocked"), o.optional("networkKey"), o.s("status"),
-            o.getValue("observations").jsonArray.map { it.jsonObject.let { v -> Observation(v.l("time"), Cidr(v.s("cidr")), v.s("kind")) } },
-            o.getValue("events").jsonArray.map { it.jsonObject.let { v -> Event(v.l("time"), v.s("code")) } }, o.optional("activeProfileId"),
-            o["domesticExit"]?.takeUnless { it is JsonNull }?.jsonObject?.let { DomesticExit(it.s("ipv4"), it.l("time"), it.s("networkKey"), ProbeSource.valueOf(it.optional("source") ?: "IPIP")) },
-            o.optional("nextProbeAllowed")?.toLong() ?: 0, o.optional("probeStatus") ?: "NOT_CHECKED",
-            o["slotPlan"]?.takeUnless { it is JsonNull }?.jsonObject?.let { p ->
+        val state = State(mode = Mode.valueOf(o.s("mode")), paused = o.b("paused"), demo = o.b("demo"), snapshot = snap,
+            lastCheck = o.l("lastCheck"), lastSuccess = o.l("lastSuccess"), nextAllowed = o.l("nextAllowed"),
+            failures = o.l("failures").toInt(), authBlocked = o.b("authBlocked"), networkKey = o.optional("networkKey"), status = o.s("status"),
+            observations = o.getValue("observations").jsonArray.map { it.jsonObject.let { v -> Observation(v.l("time"), Cidr(v.s("cidr")), v.s("kind")) } },
+            events = o.getValue("events").jsonArray.map { it.jsonObject.let { v -> Event(v.l("time"), v.s("code")) } },
+            domesticExit = o["domesticExit"]?.takeUnless { it is JsonNull }?.jsonObject?.let { DomesticExit(it.s("ipv4"), it.l("time"), it.s("networkKey"), ProbeSource.valueOf(it.optional("source") ?: "IPIP")) },
+            nextProbeAllowed = o.optional("nextProbeAllowed")?.toLong() ?: 0, probeStatus = o.optional("probeStatus") ?: "NOT_CHECKED",
+            slotPlan = o["slotPlan"]?.takeUnless { it is JsonNull }?.jsonObject?.let { p ->
                 SlotPlan(Cidr(p.s("home")), p.l("homeSlot").toInt(), p.l("mobileSlot").toInt(), p.b("homeReady"),
                     p.optional("lastMobile")?.let(::Cidr), p.optional("pendingMobile")?.let(::Cidr))
-            }, o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD,
-            o["layout"]?.takeUnless { it is JsonNull }?.jsonObject?.let(LayoutCodec::decode),
-            o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"),
-            o.optional("deviceName") ?: "",
+            }, runtimeMode = o.optional("runtimeMode")?.let { runCatching { RuntimeMode.valueOf(it) }.getOrNull() } ?: RuntimeMode.STANDARD,
+            layout = o["layout"]?.takeUnless { it is JsonNull }?.jsonObject?.let(LayoutCodec::decode),
+            accountContext = o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), globalBlock = o.optional("globalBlock"),
+            deviceName = o.optional("deviceName") ?: "",
             // Absent before 0.8: the default cadence.
-            FallbackInterval.clamp(o.optional("fallbackMinutes")?.toIntOrNull() ?: FallbackInterval.DEFAULT),
+            fallbackMinutes = FallbackInterval.clamp(o.optional("fallbackMinutes")?.toIntOrNull() ?: FallbackInterval.DEFAULT),
             // Old pending failures may have hidden HTTP_429; conservatively preserve their existing deadline.
-            o.optional("serverNotBefore")?.toLong() ?: if (o.s("status") in setOf("HTTP_429", "PENDING_REVIEW")) o.l("nextAllowed") else 0)
+            serverNotBefore = o.optional("serverNotBefore")?.toLong() ?: if (o.s("status") in setOf("HTTP_429", "PENDING_REVIEW")) o.l("nextAllowed") else 0,
+            endpoint = o.optional("endpoint")?.takeIf(Po0Credential::validEndpoint) ?: Po0Credential.DEFAULT_ENDPOINT)
         return if (o.l("version") == 1L) LayoutRules.migrate(state) else state
     }
 }

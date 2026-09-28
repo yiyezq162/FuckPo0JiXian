@@ -23,8 +23,9 @@ class LocalStore(context: Context) : StateStore {
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) State() else {
             val raw = file.openRead().bufferedReader().use { it.readText() }
             val decoded = StateCodec.decode(raw)
-            val cutoff = System.currentTimeMillis() - Policy().retentionMs
-            val pruned = decoded.copy(observations = decoded.observations.filter { it.time >= cutoff }.takeLast(500),
+            val now = System.currentTimeMillis()
+            val cutoff = now - Policy().retentionMs
+            val pruned = decoded.loaded(now).copy(observations = decoded.observations.filter { it.time >= cutoff }.takeLast(500),
                 events = decoded.events.filter { it.time >= cutoff }.takeLast(200),
                 domesticExit = decoded.domesticExit?.takeIf { it.time >= cutoff })
             if (raw != StateCodec.encode(pruned)) {

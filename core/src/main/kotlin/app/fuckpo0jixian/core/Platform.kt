@@ -4,14 +4,11 @@ import kotlinx.serialization.json.*
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
-data class Capabilities(val atomicAddWithoutEviction: Boolean = false, val safeReplace: Boolean = false)
-interface Platform {
-    val capabilities: Capabilities
+/** Po0's fixed-slot replacement, not a CAS/atomic conditional-add contract. */
+interface SlotPlatform {
     suspend fun query(): Snapshot
-    suspend fun addIfUnchanged(expected: Snapshot): Snapshot
+    suspend fun writeSlot(slot: Int): Snapshot
 }
-/** Reviewed Po0 fixed-slot replacement, not a CAS/atomic conditional-add contract. */
-interface SlotPlatform : Platform { suspend fun writeSlot(slot: Int): Snapshot }
 class ApiFailure(val code: String, val http: Int = 0, val retryAfterMs: Long = 0) : Exception(code)
 data class HttpReply(val status: Int, val body: String, val retryAfter: String? = null)
 fun interface Transport { suspend fun execute(method: String, url: String): HttpReply }
@@ -26,19 +23,26 @@ object Wire {
         }
         Snapshot(Cidr(o.getValue("currentIp").jsonPrimitive.content), rows, o.getValue("limit").jsonPrimitive.int)
     } catch (e: ApiFailure) { throw e } catch (_: Exception) { throw ApiFailure("INVALID_RESPONSE") }
+    /**
+     * Longest wait a Retry-After can impose. Nothing can shorten a server wait (not a manual check, nor saving or
+     * clearing the token), so an absurd value would otherwise stop the app for good. A server that still wants
+     * more simply answers 429 again.
+     */
+    const val MAX_RETRY_AFTER_MS = 6 * 3_600_000L
     fun retryAfter(value: String?, now: Long): Long {
         if (value == null) return 0
         val seconds = value.toLongOrNull()
-        if (seconds != null) return seconds.coerceIn(0, Long.MAX_VALUE / 1000) * 1000
-        return try { (ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - now).coerceAtLeast(0) }
+        if (seconds != null) return seconds.coerceIn(0, MAX_RETRY_AFTER_MS / 1000) * 1000
+        return try { (ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - now).coerceIn(0, MAX_RETRY_AFTER_MS) }
         catch (_: Exception) { 0 }
     }
 }
 
-/** Endpoint is fixed to reviewed source. No request logging, redirects or TLS bypass. */
+/** The endpoint comes from the official link people pasted. No request logging, redirects or TLS bypass. */
 class Po0Platform(private val token: () -> String?, private val transport: Transport,
-                  private val now: () -> Long = System::currentTimeMillis) : SlotPlatform {
-    override val capabilities = Capabilities()
+                  private val now: () -> Long = System::currentTimeMillis,
+                  private val endpoint: String = Po0Credential.DEFAULT_ENDPOINT) : SlotPlatform {
+    init { require(Po0Credential.validEndpoint(endpoint)) { "invalid_endpoint" } }
     override suspend fun query(): Snapshot {
         return request("GET", "")
     }
@@ -48,39 +52,24 @@ class Po0Platform(private val token: () -> String?, private val transport: Trans
     }
     private suspend fun request(method: String, suffix: String): Snapshot {
         val secret = token()?.takeIf { it.matches(Regex("pgnfw_[A-Za-z0-9_-]+")) } ?: throw ApiFailure("NO_TOKEN")
-        val reply = transport.execute(method, "https://124.221.69.228/api/firewall/$secret$suffix")
+        val reply = transport.execute(method, "$endpoint/api/firewall/$secret$suffix")
         if (reply.status != 200) throw ApiFailure("HTTP_${reply.status}", reply.status, Wire.retryAfter(reply.retryAfter, now()))
         return Wire.parse(reply.body)
     }
-    override suspend fun addIfUnchanged(expected: Snapshot): Snapshot = throw ApiFailure("UNSAFE_SERVER_ADD")
 }
 
-/** Test/demo only: server-side revision check and capacity refusal, not Po0 behavior. */
-open class DemoPlatform : Platform {
-    override val capabilities = Capabilities(atomicAddWithoutEviction = true)
+/** Demo only: an in-memory whitelist with Po0's slot semantics plus a revision counter. */
+class SlotDemoPlatform : SlotPlatform {
     var current = Cidr("203.0.113.0/24")
     var capacity = 5
     var entries = listOf(Entry(Cidr("198.51.100.0/24")))
     var revision = 0
     override suspend fun query() = Snapshot(current, entries, capacity, revision.toString())
-    suspend fun replaceDemoSlot(slot: Int): Snapshot {
+    override suspend fun writeSlot(slot: Int): Snapshot {
         if (entries.any { it.cidr == current && it.slot != slot }) throw ApiFailure("COVERED_OTHER_SLOT")
         if (entries.none { it.slot == slot } && entries.size >= capacity) throw ApiFailure("CAPACITY_FULL")
         entries = entries.filterNot { it.slot == slot } + Entry(current, slot)
         revision++
         return query()
     }
-    override suspend fun addIfUnchanged(expected: Snapshot): Snapshot {
-        if (expected.revision != revision.toString() || expected.current != current) throw ApiFailure("CONCURRENT_CHANGE", 409)
-        if (entries.none { it.cidr == current }) {
-            if (entries.size >= capacity) throw ApiFailure("CAPACITY_FULL", 409)
-            entries = entries + Entry(current); revision++
-        }
-        return query()
-    }
-}
-
-/** Current product demo; the base class remains a historical generic protocol fixture. */
-class SlotDemoPlatform : DemoPlatform(), SlotPlatform {
-    override suspend fun writeSlot(slot: Int) = replaceDemoSlot(slot)
 }

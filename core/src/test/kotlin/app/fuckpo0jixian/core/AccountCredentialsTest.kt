@@ -58,4 +58,15 @@ class AccountCredentialsTest {
         }
         assertNull(st.state.layout)
     }
+    @Test fun anotherServerIsAnotherAccountAndABareTokenKeepsTheServer() {
+        val store = MemoryStore(state()); var token: String? = "pgnfw_SAME"
+        val moved = AccountCredentials.save(store, "https://po0.example.com/api/firewall/pgnfw_SAME", { token }) { token = it }
+        assertEquals("https://po0.example.com", moved.endpoint); assertNotEquals("old", moved.accountContext)
+        assertNull(moved.layout, "authority of the old server's account is dropped")
+        store.save(moved.copy(layout = state().layout))
+        val kept = AccountCredentials.save(store, "pgnfw_SAME", { token }) { token = it }
+        assertEquals("https://po0.example.com", kept.endpoint); assertNotNull(kept.layout, "same token, same server")
+        assertEquals("https://po0.example.com", StateCodec.decode(StateCodec.encode(kept)).endpoint)
+        assertFailsWith<IllegalArgumentException> { AccountCredentials.save(store, "not a token", { token }) { token = it } }
+    }
 }

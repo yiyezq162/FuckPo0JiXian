@@ -28,15 +28,16 @@ internal fun writeAtomically(file: Path, bytes: ByteArray) {
 }
 
 /** Same contract as the Android store: an unreadable file is protected, never overwritten with an empty state. */
-class FileStore(val dir: Path = dataDir) : StateStore {
+class FileStore(val dir: Path = dataDir, private val clock: () -> Long = System::currentTimeMillis) : StateStore {
     private val file = dir.resolve("state.json")
     private var recoveryRequired = false
     val flow = MutableStateFlow(read())
     private fun read(): State = try {
         if (!Files.exists(file)) State() else {
             val decoded = StateCodec.decode(Files.readString(file))
-            val cutoff = System.currentTimeMillis() - Policy().retentionMs
-            decoded.copy(observations = decoded.observations.filter { it.time >= cutoff }.takeLast(500),
+            val now = clock()
+            val cutoff = now - Policy().retentionMs
+            decoded.loaded(now).copy(observations = decoded.observations.filter { it.time >= cutoff }.takeLast(500),
                 events = decoded.events.filter { it.time >= cutoff }.takeLast(200))
         }
     } catch (_: Exception) { recoveryRequired = true; State(status = "STORAGE_RECOVERY_REQUIRED", globalBlock = "STORAGE_RECOVERY_REQUIRED") }

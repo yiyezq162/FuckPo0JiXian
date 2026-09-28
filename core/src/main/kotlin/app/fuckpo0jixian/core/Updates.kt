@@ -66,11 +66,15 @@ object Updates {
         return m.groupValues.drop(1).map { it.toIntOrNull() ?: return null }
     }
 
+    /** A pre-release carries a suffix after its numbers, e.g. 0.8.3-preview. */
+    fun prerelease(version: String) = version.trim().removePrefix("v").replace(Regex("^\\d+\\.\\d+\\.\\d+"), "").isNotEmpty()
+
+    /** Higher numbers win; with equal numbers a final release is newer than its pre-release (0.8.3 > 0.8.3-preview). */
     fun newer(candidate: String, current: String): Boolean {
         val a = numbers(candidate) ?: return false
         val b = numbers(current) ?: return true // "dev" builds take any release
         for (i in 0 until 3) if (a[i] != b[i]) return a[i] > b[i]
-        return false
+        return prerelease(current) && !prerelease(candidate)
     }
 
     /** The newest release above [current] that has [assetName]'s installer; null when up to date. */

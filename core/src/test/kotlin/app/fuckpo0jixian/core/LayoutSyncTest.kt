@@ -1,5 +1,6 @@
 package app.fuckpo0jixian.core
 
+import kotlinx.coroutines.*
 import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
@@ -21,14 +22,12 @@ class LayoutSyncTest {
         NetworkIdentity("office", "Office", "Office", setOf(AuthorizedAp("02:11:22:33:44:02", WifiSecurity.WPA3)))))
     private fun state() = State(mode = Mode.AUTO, paused = false, layout = layout(), accountContext = "test-account")
     private class Fake(var snap: Snapshot) : SlotPlatform {
-        override val capabilities = Capabilities()
         var writes = mutableListOf<Int>()
         var queries = 0
         var onQuery: ((Int) -> Unit)? = null
         var afterWrite: (() -> Unit)? = null
         var drop = false
         override suspend fun query(): Snapshot { queries++; onQuery?.invoke(queries); return snap }
-        override suspend fun addIfUnchanged(expected: Snapshot): Snapshot = error("slotless prohibited")
         override suspend fun writeSlot(slot: Int): Snapshot {
             writes += slot
             snap = snap.copy(entries = snap.entries.filterNot { it.slot == slot } + Entry(snap.current, slot))
@@ -40,7 +39,7 @@ class LayoutSyncTest {
     private fun fake(current: Cidr = newHome, full: Boolean = false) = Fake(Snapshot(current,
         listOf(Entry(home, 0), Entry(office, 1), Entry(mobile, 2)) + if (full) listOf(Entry(Cidr("203.0.114.0/24"), 3), Entry(Cidr("203.0.115.0/24"))) else emptyList(), 5))
     private fun session(f: Fake, w: WifiObservation? = wifi(), live: () -> Boolean = { true }) =
-        NetworkSession("n", if (w == null) "cellular" else "wifi", true, f.snap.current, w, stillCurrent = live)
+        NetworkSession("n", if (w == null) "cellular" else "wifi", f.snap.current, w, stillCurrent = live)
     private suspend fun check(st: StateStore, f: Fake, w: WifiObservation? = wifi()) = Engine(st, { clock }).check(f, session(f, w))
     @Test fun manualCheckSkipsLoopGuardButNotServerRetryAfter() = runTest {
         val st = MemoryStore(state()); val f = fake(current = home)
@@ -302,13 +301,81 @@ class LayoutSyncTest {
         assertEquals("MANUAL_EXPIRED", Engine(st, { clock }).check(f, session(f).copy(manualPermit = permit)))
         assertTrue(f.writes.isEmpty())
     }
-    @Test fun invalidSlotStructureAndMismatchedAccountPendingAreGlobal() = runTest {
+    @Test fun invalidSlotStructureRetriesButMismatchedAccountPendingIsGlobal() = runTest {
         val st = MemoryStore(state()); val f = fake()
         f.snap = f.snap.copy(entries = listOf(Entry(home, 0), Entry(office, 0)))
-        assertEquals("SLOT_INVALID", check(st, f)); assertEquals("SLOT_INVALID", st.state.globalBlock)
+        assertEquals("SLOT_INVALID", check(st, f)); assertNull(st.state.globalBlock)
+        assertEquals(1, st.state.failures); assertTrue(f.writes.isEmpty())
         val p = SlotPending("other-account", 1, 0, "FIXED", home, newHome, "home", fake().snap, clock)
         val st2 = MemoryStore(state().copy(layout = layout().copy(pending = p)))
         assertEquals("ACCOUNT_MISMATCH", check(st2, fake())); assertEquals("ACCOUNT_MISMATCH", st2.state.globalBlock)
+    }
+    @Test fun malformedReadRetriesWithoutGlobalBlockAndKeepsPending() = runTest {
+        val st = MemoryStore(state()); val f = fake()
+        f.onQuery = { throw ApiFailure("INVALID_RESPONSE") }
+        assertEquals("INVALID_RESPONSE", check(st, f))
+        assertNull(st.state.globalBlock); assertEquals(1, st.state.failures); assertTrue(f.writes.isEmpty())
+        f.onQuery = null; clock = st.state.nextAllowed
+        assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(0, st.state.failures)
+
+        val st2 = MemoryStore(state()); val f2 = fake()
+        val pending = SlotPending(st2.state.accountContext, 1, 0, "FIXED", home, newHome, "home", f2.snap, clock)
+        st2.save(st2.state.copy(layout = layout().copy(pending = pending)))
+        f2.onQuery = { throw ApiFailure("INVALID_RESPONSE") }
+        assertEquals("INVALID_RESPONSE", check(st2, f2))
+        assertNull(st2.state.globalBlock); assertEquals(pending, st2.state.layout!!.pending)
+        f2.onQuery = null; clock = st2.state.nextAllowed
+        assertEquals("RECOVERED_NOT_APPLIED", check(st2, f2)); assertTrue(f2.writes.isEmpty())
+    }
+    @Test fun malformedReadAfterOurWriteStaysGlobal() = runTest {
+        val st = MemoryStore(state()); val f = fake()
+        f.onQuery = { if (it == 3) throw ApiFailure("INVALID_RESPONSE") }
+        assertEquals("INVALID_RESPONSE", check(st, f))
+        assertEquals(listOf(0), f.writes); assertEquals("INVALID_RESPONSE", st.state.globalBlock)
+        assertNotNull(st.state.layout!!.pending)
+    }
+    @Test fun reviewWithoutPendingAcceptsPeerUpdatesButNotUnknownChanges() = runTest {
+        val moved = Cidr("198.18.60.0/24")
+        repeat(6) { variation ->
+            val f = fake(full = true); val old = f.snap
+            val slots = layout().slots.map { if (it.number == 1) it.copy(shared = true) else it }
+            val st = MemoryStore(state().copy(snapshot = old, globalBlock = "NETWORK_OR_STORAGE_ERROR", layout = layout().copy(slots = slots)))
+            fun replace(slot: Int?, cidr: Cidr?) = old.copy(entries = old.entries.mapNotNull { if (it.slot == slot) cidr?.let { c -> it.copy(cidr = c) } else it })
+            f.snap = when (variation) {
+                0 -> replace(3, moved) // another device's slot
+                1 -> replace(1, moved) // co-managed fixed slot
+                2 -> replace(null, moved) // unnumbered record
+                3 -> replace(0, moved) // this device's own slot
+                4 -> replace(3, null) // another device's slot emptied
+                else -> old.copy(capacity = 6)
+            }
+            val code = Engine(st, { clock }).check(f, session(f), manual = true, observeOnly = true)
+            if (variation <= 1) {
+                assertEquals("PROTECTION_REVIEWED", code, "variation $variation")
+                assertNull(st.state.globalBlock); assertTrue(st.state.paused)
+                val slot = st.state.layout!!.slots.first { it.number == if (variation == 0) 3 else 1 }
+                assertEquals("PEER_UPDATED", slot.status)
+                if (variation == 1) assertEquals(moved, slot.baseline)
+            } else {
+                assertEquals("SLOT_VERIFY_FAILED", code, "variation $variation")
+                assertNotNull(st.state.globalBlock)
+            }
+            assertTrue(f.writes.isEmpty())
+        }
+    }
+    @Test fun networkChangeOrCancellationIsNotAFailure() = runTest {
+        val st = MemoryStore(state()); val f = fake(); var current = true
+        f.onQuery = { if (it == 2) current = false }
+        assertEquals("NETWORK_CHANGED", Engine(st, { clock }).check(f, session(f, live = { current })))
+        assertEquals(0, st.state.failures); assertEquals(clock + Policy().minIntervalMs, st.state.nextAllowed)
+        clock += Policy().minIntervalMs
+        val started = CompletableDeferred<Unit>()
+        val hanging = object : SlotPlatform by f { override suspend fun query(): Snapshot { started.complete(Unit); awaitCancellation() } }
+        val task = launch { Engine(st, { clock }).check(hanging, session(f)) }
+        started.await(); task.cancelAndJoin()
+        assertEquals("CANCELLED_NETWORK_OR_SETTINGS", st.state.status); assertEquals(0, st.state.failures)
+        clock += Policy().minIntervalMs
+        assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(listOf(0), f.writes)
     }
     @Test fun noteOnlyEditsNeedNoNewGrantAndReappearingHistoryDoesNotClearConflict() {
         val s = state().copy(snapshot = fake().snap, lastCheck = 1)

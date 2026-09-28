@@ -1,6 +1,7 @@
 package app.fuckpo0jixian
 
 import android.Manifest
+import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
@@ -50,7 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        Screenshots.apply(this)
         val controller = (application as FuckPo0JiXianApp).controller
         setContent { FuckPo0JiXianTheme { FuckPo0JiXian(controller) {
             if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -66,6 +67,17 @@ internal object Recents {
     fun apply(context: Context) {
         val hide = hidden(context)
         context.getSystemService(ActivityManager::class.java).appTasks.forEach { runCatching { it.setExcludeFromRecents(hide) } }
+    }
+}
+
+/** Screens stay out of screenshots and the recents thumbnail unless people allow them, e.g. to ask for help. */
+internal object Screenshots {
+    private fun prefs(context: Context) = context.getSharedPreferences("ui", Context.MODE_PRIVATE)
+    fun allowed(context: Context) = prefs(context).getBoolean("allow_screenshots", false)
+    fun set(activity: Activity, value: Boolean) { prefs(activity).edit().putBoolean("allow_screenshots", value).apply(); apply(activity) }
+    fun apply(activity: Activity) {
+        if (allowed(activity)) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 }
 
@@ -237,7 +249,7 @@ private fun LazyListScope.homeItems(s: State, busy: Boolean, network: String, cu
         }
     }
     if (s.globalBlock != null) item(key = "protection-review") {
-        Section(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
+        Section(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；其他设备槽的更新可通过，未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
             ActionRow("只读复核保护状态", enabled = !busy, onClick = c::reviewProtection)
         }
     }

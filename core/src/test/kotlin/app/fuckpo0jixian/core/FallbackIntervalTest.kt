@@ -37,10 +37,12 @@ class FallbackIntervalTest {
     }
 
     /** Po0 plus an exit that can move; counts every whitelist query. */
-    private class Po0 : DemoPlatform(), SlotPlatform {
+    private class Po0(private val demo: SlotDemoPlatform = SlotDemoPlatform()) : SlotPlatform by demo {
         var queries = 0
-        override suspend fun query(): Snapshot { queries++; return super.query() }
-        override suspend fun writeSlot(slot: Int) = replaceDemoSlot(slot)
+        var current by demo::current
+        var entries by demo::entries
+        var capacity by demo::capacity
+        override suspend fun query(): Snapshot { queries++; return demo.query() }
     }
 
     /**
@@ -56,7 +58,7 @@ class FallbackIntervalTest {
             layout = SlotLayout(slots = listOf(ManagedSlot(0, "家", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true,
                 authorized = true, baseline = current)))))
         val engine = Engine(store, { clock })
-        val session = NetworkSession("n", "cellular", false) { true }
+        val session = NetworkSession("n", "cellular") { true }
         suspend fun remote() = engine.check(po0, session.copy(observedCidr = store.load().domesticExit?.cidr))
         assertEquals("SLOT_CURRENT", remote())
         var probes = 0; var remoteChecks = 0
@@ -90,7 +92,7 @@ class FallbackIntervalTest {
         val store = MemoryStore(State(paused = false, mode = Mode.OBSERVE, fallbackMinutes = 2,
             layout = SlotLayout(slots = listOf(ManagedSlot(0)))))
         val engine = Engine(store, { clock })
-        val session = NetworkSession("n", "wifi", false) { true }
+        val session = NetworkSession("n", "wifi") { true }
         assertEquals("PRESENT_CURRENT_CHECK", engine.check(po0, session))
         var remoteChecks = 0
         repeat(30) { // one hour, probe always failing

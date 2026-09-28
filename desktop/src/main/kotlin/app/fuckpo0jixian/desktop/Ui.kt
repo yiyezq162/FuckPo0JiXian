@@ -210,7 +210,7 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
         SettingRow("连接 Po0", icon = Glyph.Key, onClick = { go(Page.SETTINGS) })
     }
     Notices(s)
-    if (s.globalBlock != null) Group(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
+    if (s.globalBlock != null) Group(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；其他设备槽的更新可通过，未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
         SettingRow("只读复核保护状态", icon = Glyph.Sync, enabled = !busy && credential, onClick = c::reviewProtection)
     }
     // Three facts at a glance.
@@ -375,7 +375,8 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
     var autostart by remember { mutableStateOf(runCatching { Autostart.enabled() }.getOrDefault(false)) }
     UpdateGroup(c)
     Group("Po0 账户", footer = "Token 保存在${if (os == Os.WINDOWS) " Windows 凭据加密（DPAPI）" else "系统钥匙串"}中。") {
-        SettingRow("Token", subtitle = if (credential) "上次连接 ${time(s.lastSuccess)}" else "未添加", icon = Glyph.Key, iconTint = colors.accent) {
+        SettingRow("Token", subtitle = if (!credential) "未添加" else "上次连接 ${time(s.lastSuccess)}" +
+            if (s.endpoint != Po0Credential.DEFAULT_ENDPOINT) " · ${s.endpoint.removePrefix("https://")}" else "", icon = Glyph.Key, iconTint = colors.accent) {
             if (credential) Button("检查连接", c::checkConnection, enabled = !busy, loading = busy)
             Button(if (credential) "更换" else "添加", { tokenDialog = true }, if (credential) ButtonKind.SECONDARY else ButtonKind.PRIMARY, enabled = !busy)
         }
@@ -423,7 +424,7 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             TextField(input, { input = it.take(2048) }, "pgnfw_…", secret = true)
             Text(if (input.isNotBlank() && token == null) "格式不正确，应以 pgnfw_ 开头或为官方链接" else "保存后检查会先暂停。",
                 style = Type.caption, color = if (input.isNotBlank() && token == null) colors.red else colors.secondary)
-        }, actions = listOf(DialogAction("保存", preferred = true, enabled = token != null) { token?.let(c::saveToken); tokenDialog = false },
+        }, actions = listOf(DialogAction("保存", preferred = true, enabled = token != null) { if (token != null) c.saveToken(input); tokenDialog = false },
             DialogAction("取消") { tokenDialog = false }))
     }
     if (remove) Alert("移除连接？", { remove = false }, message = "将删除本机的 Token 和槽位配置并暂停同步。Po0 上的白名单不受影响。",

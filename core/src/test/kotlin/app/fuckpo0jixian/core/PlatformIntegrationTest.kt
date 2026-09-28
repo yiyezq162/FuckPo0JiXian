@@ -9,11 +9,11 @@ import kotlin.test.*
 
 class PlatformIntegrationTest {
     private val body = """{"enabled":true,"currentIp":"203.0.113.0/24","limit":9,"whitelist":[{"ip":"198.51.100.0/24","slot":2}]}"""
-    @Test fun noTokenNoNetworkAndUnsafeAddNeverReachesTransport() = runTest {
+    @Test fun noTokenNeverReachesTransport() = runTest {
         var calls = 0
         val p = Po0Platform({ null }, Transport { _, _ -> calls++; HttpReply(200, body) })
         assertEquals("NO_TOKEN", assertFailsWith<ApiFailure> { p.query() }.code)
-        assertEquals("UNSAFE_SERVER_ADD", assertFailsWith<ApiFailure> { p.addIfUnchanged(Wire.parse(body)) }.code)
+        assertEquals("NO_TOKEN", assertFailsWith<ApiFailure> { p.writeSlot(0) }.code)
         assertEquals(0, calls)
     }
     @Test fun adapterUsesReviewedHttpsEndpointAndGetOnly() = runTest {
@@ -21,7 +21,7 @@ class PlatformIntegrationTest {
             assertEquals("GET", method); assertEquals("https://124.221.69.228/api/firewall/pgnfw_TEST_ONLY", url)
             HttpReply(200, body)
         })
-        assertEquals(9, p.query().capacity); assertFalse(p.capabilities.atomicAddWithoutEviction)
+        assertEquals(9, p.query().capacity)
     }
     @Test fun malformedResponseFailsClosed() {
         listOf("{}", body.replace("true", "false"), body.replace("/24", "/16"), body.replace("\"limit\":9", "\"limit\":0")).forEach {

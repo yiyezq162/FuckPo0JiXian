@@ -49,7 +49,7 @@ class ReviewSafetyTest {
                 return HttpReply(200, """{"enabled":true,"limit":5,"currentIp":"203.0.113.0/24","whitelist":[]}""")
             }
         }
-        fun controller() = DesktopController(FileStore(dir), vault,
+        fun controller() = DesktopController(FileStore(dir) { clock }, vault,
             { DesktopLink("en0", "192.0.2.5", "192.0.2.1", "a4:11:22:33:44:55") },
             stun = { "203.0.113.9" }, now = { clock }) { _, _ -> transport }
         val c = controller()

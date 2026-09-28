@@ -1,5 +1,6 @@
 package app.fuckpo0jixian.desktop
 
+import app.fuckpo0jixian.core.NetworkKind
 import app.fuckpo0jixian.core.WifiObservation
 import app.fuckpo0jixian.core.WifiSecurity
 import java.net.Inet4Address
@@ -20,7 +21,7 @@ val os: Os = System.getProperty("os.name").lowercase().let {
 data class DesktopLink(val iface: String?, val localIp: String?, val gatewayIp: String?, val gatewayMac: String?) {
     val key: String get() = listOf(iface, localIp, gatewayIp, gatewayMac).joinToString("|")
     val online get() = localIp != null
-    val kind get() = if (gatewayMac != null) "lan" else "other"
+    val kind get() = if (gatewayMac != null) NetworkKind.LAN else NetworkKind.OTHER
     val label get() = gatewayIp?.let { "路由器 $it" } ?: if (online) "未识别的网络" else "未连接"
     fun observation(now: Long): WifiObservation? =
         gatewayMac?.let { WifiObservation(key, "gw:$gatewayIp", it, WifiSecurity.GATEWAY, now) }
@@ -31,7 +32,15 @@ object DesktopNetwork {
     /** Interfaces a VPN / TUN creates; the physical network is the one underneath. */
     private val tunnel = Regex("""^(utun|ipsec|ppp|tun|tap|gif|stf)\d*""")
 
-    /** Cheap enough to poll every few seconds; no request leaves the computer. */
+    /**
+     * The interfaces that are up and their IPv4 addresses, read in-process. Changes whenever a network comes, goes or
+     * re-addresses, so the monitor runs the heavier [read] (route and ARP commands) only then and on a slow timer.
+     */
+    fun fingerprint(): String = NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+        .map { i -> i.name + "=" + i.inetAddresses.toList().filterIsInstance<Inet4Address>().map { it.hostAddress }.sorted().joinToString(",") }
+        .sorted().joinToString(";")
+
+    /** Runs the route and ARP commands; no request leaves the computer. */
     fun read(): DesktopLink {
         val route = runCatching { defaultRoute() }.getOrNull()
         val gateway = route?.gateway

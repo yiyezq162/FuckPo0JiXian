@@ -52,8 +52,7 @@ object LayoutRules {
             ManagedSlot(p.mobileSlot, "本机移动", SlotPurpose.MOBILE, Writer.LOCAL,
                 automatic = true, baseline = p.lastMobile, legacyPending = p.pendingMobile,
                 status = "LEGACY_RECONCILE")
-        ), notices = setOf("MIGRATED_WIFI_POLICY_OFF")), profiles = emptyList(), ownership = emptyList(),
-            activeProfileId = null, budget = Budget())
+        ), notices = setOf("MIGRATED_WIFI_POLICY_OFF")))
     }
     fun validate(snap: Snapshot, layout: SlotLayout) {
         val numbers = snap.entries.mapNotNull { it.slot }
@@ -124,8 +123,7 @@ data class TargetDecision(val slot: ManagedSlot? = null, val code: String, val n
 object SlotSelection {
     fun select(layout: SlotLayout, session: NetworkSession, now: Long): TargetDecision {
         val wifi = session.wifi
-        // "lan": a desktop network identified by its gateway, matched exactly like a Wi-Fi AP.
-        if (session.kind == "wifi" || session.kind == "Wi-Fi" || session.kind == "lan") {
+        if (session.kind == NetworkKind.WIFI || session.kind == NetworkKind.LAN) {
             if (wifi?.usable(now, session.key) != true) return TargetDecision(code = "WIFI_UNAVAILABLE")
             val exact = layout.identities.filter { it.ssid == wifi.ssid && AuthorizedAp(wifi.bssid!!, wifi.security) in it.aps }
             if (exact.size > 1) return TargetDecision(code = "IDENTITY_AMBIGUOUS")
@@ -142,7 +140,7 @@ object SlotSelection {
             return TargetDecision(mobile, if (mobile == null) "UNKNOWN_WIFI" else "MOBILE_MATCH",
                 if (sameName) "AP_CONFIRM:${wifi.ssid}:${wifi.bssid}:${wifi.security}" else null)
         }
-        if (session.kind != "cellular" && !session.kind.startsWith("移动数据")) return TargetDecision(code = "NO_TARGET")
+        if (session.kind != NetworkKind.CELLULAR) return TargetDecision(code = "NO_TARGET")
         return TargetDecision(layout.slots.singleOrNull { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic }, "MOBILE_MATCH")
     }
 }

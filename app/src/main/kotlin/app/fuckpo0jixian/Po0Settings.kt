@@ -108,6 +108,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
         ListRow("Token", value = when { s.demo -> "演示模式"; credential -> "已保存"; else -> "未添加" },
             leading = { IconTile(Glyphs.Key, colors.accent) })
         if (credential && !s.demo) ListRow("上次连接", value = if (s.lastSuccess > 0) time(s.lastSuccess) else "尚未连接")
+        if (credential && !s.demo && s.endpoint != Po0Credential.DEFAULT_ENDPOINT) ListRow("服务器", value = s.endpoint.removePrefix("https://"))
         ActionRow(if (busy) "正在检查…" else "检查连接", enabled = !busy && (credential || s.demo), loading = busy, onClick = c::checkConnection)
         ActionRow(if (credential) "更换 Token" else "添加 Token", enabled = !busy) { edit = true }
         if (credential) ActionRow("移除连接", color = colors.red, enabled = !busy) { remove = true }
@@ -131,7 +132,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
         }
         if (input.isNotBlank() && token == null) Text("格式不正确，应以 pgnfw_ 开头或为官方链接", style = Apple.footnote, color = colors.red, textAlign = TextAlign.Center)
         else Text("保存后检查会先暂停。", style = Apple.footnote, color = colors.secondary, textAlign = TextAlign.Center)
-    }, actions = listOf(AlertAction("取消", onClick = onDismiss), AlertAction("保存", preferred = true, enabled = token != null) { token?.let(onSave) }))
+    }, actions = listOf(AlertAction("取消", onClick = onDismiss), AlertAction("保存", preferred = true, enabled = token != null) { if (token != null) onSave(input) }))
 }
 
 @Composable private fun RuntimeSection(s: State, c: Controller, busy: Boolean) {
@@ -208,6 +209,7 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
     var rename by remember { mutableStateOf(false) }
     var peer by remember { mutableStateOf<PeerLayout?>(null) }
     var export by remember { mutableStateOf(false) }
+    var screenshots by remember { mutableStateOf(Screenshots.allowed(context)) }
     Section(header = "多设备", footer = "每台设备只授权自己负责的槽位。导入其他设备的导出数据，只会标注它管理的槽位，不会授权或写入。") {
         ListRow("本机名称", value = s.deviceName.ifBlank { "未设置" }, chevron = true, enabled = !busy) { rename = true }
         ActionRow("从剪贴板导入其他设备的分工", enabled = !busy && s.snapshot != null) {
@@ -216,6 +218,8 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
             runCatching { PeerImport.parse(text) }.onSuccess { peer = it }.onFailure { c.feedback.value = statusText("IMPORT_INVALID") }
         }
         ActionRow("导出脱敏数据") { export = true }
+        ToggleRow("允许截图", screenshots, { value -> (context as? android.app.Activity)?.let { screenshots = value; Screenshots.set(it, value) } },
+            subtitle = "截图会包含 IP 和槽位，分享前请检查")
     }
     if (export) IosAlert("导出脱敏数据", { export = false },
         message = "Token 已去除，账户标识、Wi-Fi 名称和接入点不导出；IP 只保留前两段（如 203.0.*.0/24）。可用于复盘，也可在其他设备上导入分工。",

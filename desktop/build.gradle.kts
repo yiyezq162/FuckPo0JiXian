@@ -5,8 +5,12 @@ kotlin { jvmToolchain(17) }
 
 /** Shown in the app; follows the Android versionName, e.g. 0.7.0-preview. */
 val appVersion: String = Regex("versionName = \"([^\"]+)\"").find(rootProject.file("app/build.gradle.kts").readText())!!.groupValues[1]
-/** Installers require MAJOR > 0 and digits only, so 0.7.0-preview is packaged as 1.7.0 (metadata only). */
-val installerVersion: String = Regex("^0\\.(\\d+)\\.(\\d+)").find(appVersion)!!.destructured.let { (minor, patch) -> "1.$minor.$patch" }
+/**
+ * Installers require MAJOR > 0 and digits only, so the major version is shifted by one: 0.7.0-preview is packaged as
+ * 1.7.0 and a later 1.0.0 as 2.0.0 (metadata only). The order of releases is kept, which in-place MSI upgrades need.
+ */
+val installerVersion: String = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)").find(appVersion)!!.destructured
+    .let { (major, minor, patch) -> "${major.toInt() + 1}.$minor.$patch" }
 
 dependencies {
     implementation(project(":core"))

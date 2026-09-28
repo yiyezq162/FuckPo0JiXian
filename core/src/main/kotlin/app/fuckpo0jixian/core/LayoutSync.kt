@@ -65,26 +65,23 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                     occupant == p.original -> "RECOVERED_NOT_APPLIED"
                     else -> "SLOT_CONFLICT"
                 }
+                val slots = if (reviewing) followPeers(layout.slots, p.before, before, p.slot, t) else layout.slots
                 s = s.copy(paused = s.paused || reviewing, globalBlock = if (reviewing) null else s.globalBlock,
-                    layout = layout.copy(pending = null, slots = layout.slots.map {
-                    if (it.number != p.slot) {
-                        val occupantNow = before.entries.find { entry -> entry.slot == it.number }?.cidr
-                        val occupantThen = p.before.entries.find { entry -> entry.slot == it.number }?.cidr
-                        if (reviewing && occupantNow != occupantThen) it.copy(status = "PEER_UPDATED", changedAt = t,
-                            baseline = if (it.writer == Writer.LOCAL && it.shared && it.authorized) occupantNow else it.baseline)
-                        else it
-                    } else it.copy(
+                    layout = layout.copy(pending = null, slots = slots.map {
+                    if (it.number != p.slot) it else it.copy(
                         baseline = if (versionMatches && occupant == p.candidate) occupant else it.baseline,
                         authorized = versionMatches && code != "SLOT_CONFLICT" && it.authorized, status = code)
                 }))
                 return finish(code)
             }
             if (reviewing) {
-                // Without a journal we cannot attribute changes. Require the previous protected snapshot intact.
+                // No journal: no write of ours is unaccounted for. As in pending recovery, only non-empty replacements in
+                // slots labelled as another device's or co-managed are accepted; with a phone updating its own slot,
+                // demanding an untouched whitelist would keep this device blocked for good. Anything else stays blocked.
                 val previous = store.load().snapshot
-                if (previous == null || previous.capacity != before.capacity || previous.entries.toSet() != before.entries.toSet())
-                    throw ApiFailure("SLOT_VERIFY_FAILED")
-                s = s.copy(paused = true, globalBlock = null)
+                if (previous != null && !reviewablePeers(previous, before, null, layout)) throw ApiFailure("SLOT_VERIFY_FAILED")
+                s = s.copy(paused = true, globalBlock = null,
+                    layout = if (previous == null) layout else layout.copy(slots = followPeers(layout.slots, previous, before, null, t)))
                 return finish("PROTECTION_REVIEWED")
             }
             // v1 carried a narrower mobile authorization. Reconcile, never infer identity or unknown-WiFi rights.
@@ -168,7 +165,17 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
             if (durable.accountContext != initialAccount || durable.layout?.version != initialVersion) return "NETWORK_CHANGED"
             val failure = e as? ApiFailure
             val code = if (e is CancellationException) "CANCELLED_NETWORK_OR_SETTINGS" else failure?.code ?: "NETWORK_OR_STORAGE_ERROR"
-            val global = code in setOf("SLOT_INVALID", "INVALID_RESPONSE", "SLOT_VERIFY_FAILED", "ACCOUNT_MISMATCH", "NETWORK_OR_STORAGE_ERROR")
+            // A malformed or inconsistent read stops this check before any write, so it retries with backoff like any
+            // other failed request. Only around our own write does it mean something we cannot account for.
+            val global = code in setOf("SLOT_VERIFY_FAILED", "ACCOUNT_MISMATCH", "NETWORK_OR_STORAGE_ERROR") ||
+                (postAttempted && code in setOf("SLOT_INVALID", "INVALID_RESPONSE"))
+            if (!postAttempted && code in setOf("CANCELLED_NETWORK_OR_SETTINGS", "NETWORK_CHANGED")) {
+                // The network or settings moved on: not a failure. The next network's check must not wait out a backoff;
+                // the loop-guard reservation made at the start still applies.
+                runCatching { store.save(durable.copy(status = code)) }
+                if (e is CancellationException) throw e
+                return code
+            }
             val count = durable.failures + 1
             val wait = maxOf(policy.minIntervalMs, failure?.retryAfterMs ?: 0,
                 (60_000L * (1L shl (count - 1).coerceIn(0, 6))).coerceAtMost(policy.maxBackoffMs))
@@ -184,15 +191,23 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
 
     /** Only explicitly designated peer/co-managed slots may change during explicit read-only review.
      * Unknown records (including unnumbered), missing records and capacity changes remain protected. */
-    private fun reviewablePeers(old: Snapshot, current: Snapshot, target: Int, layout: SlotLayout): Boolean {
+    private fun reviewablePeers(old: Snapshot, current: Snapshot, target: Int?, layout: SlotLayout): Boolean {
         if (old.capacity != current.capacity) return false
-        val a = old.entries.filterNot { it.slot == target }.toSet()
-        val b = current.entries.filterNot { it.slot == target }.toSet()
+        val a = old.entries.filterNot { target != null && it.slot == target }.toSet()
+        val b = current.entries.filterNot { target != null && it.slot == target }.toSet()
         return ((a - b) + (b - a)).all { entry ->
             val number = entry.slot ?: return@all false
             val slot = layout.slots.find { it.number == number } ?: return@all false
             (slot.writer == Writer.OTHER_DEVICE || (slot.writer == Writer.LOCAL && slot.shared && slot.purpose == SlotPurpose.FIXED)) &&
                 a.any { it.slot == number } && b.any { it.slot == number }
         }
+    }
+
+    /** Slots whose occupant changed while protected read as peer updates; co-managed ones take the new value as baseline. */
+    private fun followPeers(slots: List<ManagedSlot>, old: Snapshot, current: Snapshot, target: Int?, t: Long) = slots.map {
+        val occupantNow = current.entries.find { entry -> entry.slot == it.number }?.cidr
+        val occupantThen = old.entries.find { entry -> entry.slot == it.number }?.cidr
+        if (it.number == target || occupantNow == occupantThen) it else it.copy(status = "PEER_UPDATED", changedAt = t,
+            baseline = if (it.writer == Writer.LOCAL && it.shared && it.authorized) occupantNow else it.baseline)
     }
 }

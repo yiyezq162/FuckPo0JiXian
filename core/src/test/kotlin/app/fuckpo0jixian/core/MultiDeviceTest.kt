@@ -22,16 +22,14 @@ class MultiDeviceTest {
         snapshot = snap(home, listOf(Entry(home, 0), Entry(office, 1), Entry(phone, 2))))
     private fun snap(current: Cidr, entries: List<Entry>) = Snapshot(current, entries, 5)
     private class Fake(var snap: Snapshot) : SlotPlatform {
-        override val capabilities = Capabilities()
         val writes = mutableListOf<Int>()
         override suspend fun query() = snap
-        override suspend fun addIfUnchanged(expected: Snapshot): Snapshot = error("unused")
         override suspend fun writeSlot(slot: Int): Snapshot {
             writes += slot; snap = snap.copy(entries = snap.entries.filterNot { it.slot == slot } + Entry(snap.current, slot)); return snap
         }
     }
     private suspend fun check(st: StateStore, f: Fake, w: WifiObservation? = wifi(), kind: String = if (w == null) "cellular" else "wifi") =
-        Engine(st, { clock }).check(f, NetworkSession("n", kind, true, f.snap.current, w) { true })
+        Engine(st, { clock }).check(f, NetworkSession("n", kind, f.snap.current, w) { true })
     private fun slot(st: MemoryStore, n: Int) = st.state.layout!!.slots.first { it.number == n }
 
     @Test fun sharedFixedSlotFollowsAnotherDeviceEvenWhenAway() = runTest {

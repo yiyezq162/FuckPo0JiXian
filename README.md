@@ -4,7 +4,7 @@
 
 自动维护 Po0 的 IPv4 白名单：家里、公司的宽带出口变了，或手机换了移动网络，FuckPo0JiXian 会把对应的白名单槽位更新成新的 /24 网段。Android 9+（标准模式无需 root），以及 macOS / Windows 桌面端。
 
-> 当前源码为 **0.8.3-preview**，属于测试预发布，不是稳定正式版。
+> 当前源码为 **0.8.4-preview**，属于测试预发布，不是稳定正式版。
 
 ## 下载
 
@@ -14,7 +14,6 @@
 | --- | --- |
 | `FuckPo0JiXian-<版本>.apk` | 推荐安装 |
 | `FuckPo0JiXian-Runtime-<版本>.zip` | 可选的 Magisk / KernelSU 模块，标准模式不需要 |
-| `FuckPo0JiXian-<版本>-debug.apk` | 仅供开发调试 |
 | `SHA256SUMS-runtime*` | 以上文件的校验和 |
 | `FuckPo0JiXian-Desktop-<版本>-macos-arm64.dmg` | Mac（Apple 芯片）桌面端 |
 | `FuckPo0JiXian-Desktop-<版本>-windows-x64.msi` / `.exe` | Windows 桌面端，二选一 |
@@ -22,7 +21,7 @@
 
 ## 快速上手
 
-1. **设置** → 添加 Token（或粘贴官方接口链接）→ 检查连接。首次默认暂停且只读。
+1. **设置** → 添加 Token（或粘贴官方接口链接，链接里的服务器地址会一并保存）→ 检查连接。首次默认暂停且只读。
 2. **白名单** → 点按槽位，给它起名并选择用途：
    - **固定网络**：家、公司等。绑定当前 Wi-Fi 后，该网络出口变化时自动更新这一格。
    - **设备移动**：跟随这台手机的移动数据出口。每台手机最多一个，多台手机各用独立槽位。
@@ -46,16 +45,18 @@ Po0 没有备注字段，也不区分是谁写的，所以各设备之间不通�
 - **按路由器识别网络**（默认网关及其 MAC 地址），有线、Wi-Fi 都适用，不需要定位权限。换路由器后重新绑定。
 - **出口直接从本机网卡核对**：出口通过绑定物理网卡的 STUN（哔哩哔哩、小米等国内服务器，失败时用 ip.3322.net）获取，不受系统代理和 Clash 等 VPN / TUN 影响。Po0 请求优先走物理网卡；部分 Windows TUN 下直连 TCP 收不到回包，此时查询会经 TUN 发出，但只有 Po0 看到的出口与直连出口一致才会写入，代理节点的 IP 不会进白名单。
 - “外出跟随”槽适合笔记本：在未绑定的网络上跟随本机出口。
-- Token 保存在 macOS 钥匙串 / Windows DPAPI 中。
+- Token 保存在 macOS 钥匙串 / Windows DPAPI 中，不会明文落盘；但以同一用户身份运行的其他程序仍可能读取（例如调用 `security` 命令）。电脑上请只运行可信的软件。
 - 预览版未签名：Mac 首次打开被拦截时，到「系统设置 → 隐私与安全性」点“仍要打开”（目前仅 Apple 芯片版）；Windows 可能出现 SmartScreen 提示，点“更多信息 → 仍要运行”。
 
 ## 更新
 
 三端都在「设置」里检查更新（每天自动查一次，不会自动下载）。点“下载并安装”后先核对 GitHub 给出的 SHA-256，再安装：
 
-- **Android**：由系统弹出安装确认，首次需允许本应用“安装未知应用”；只接受同一签名的 APK，配置保留。运行辅助模块仍在 Magisk / KernelSU 中更新。
+- **Android**：由系统弹出安装确认，首次需允许本应用“安装未知应用”；只接受同一签名的 APK，配置保留。运行辅助模块不必随 APK 一起更新。
 - **Mac**：确认应用退出后，先备份再替换并重新打开。退出超时或备份失败中止；复制失败尝试恢复，恢复失败保留旁边的 `.app.recovery.*` 目录及下载的安装包，请勿删除。需要对应用所在位置有写权限，否则会打开安装包供手动安装。
-- **Windows**：应用退出后用安装包就地升级（当前用户安装，无需管理员），完成后自动重新打开。
+- **Windows**：确认应用退出后用安装包就地升级（当前用户安装，无需管理员），完成后重新打开；退出超时则不安装，安装失败时旧版本保留。
+
+桌面安装包没有代码签名，是否可信取决于本仓库的 GitHub 账户和 Actions：校验和只能证明下载完整，不能证明发布者。Android 另外会核对 APK 签名证书。
 
 ## 安全设计
 
@@ -64,6 +65,7 @@ Po0 没有备注字段，也不区分是谁写的，所以各设备之间不通�
 - **写入前后都核对**：查询 → 写前重读 → 记录待确认操作 → 定向写入 → 再次查询核验。平台没有 CAS，写前重读无法完全消除最后一刻的竞态，请勿让其他客户端共用同一槽位。
 - **保护后的只读复核**：概览出现全局保护时，可点“只读复核保护状态”。不重发上次写入，保留待确认记录直至核对通过；成功后仍暂停。仅已标注的其他设备/共管槽的非空替换可经显式复核接受，未知变化与记录丢失仍受保护。详见 [恢复说明](docs/SLOTS.md)。
 - **不信任代理出口**：所有请求都绑定物理网络（Wi-Fi / 移动数据 / 网卡）且不走系统代理，开着 Clash 等 VPN / TUN 也照常直连核对；国内出口与平台识别不一致时禁止写入。Android 上若 VPN 不允许应用绕过，需在 VPN 的分应用代理中绕过本应用。
+- **异常先重试再停机**：写入前读到的异常数据只退避重试，连续失败才通知；只有本机写入后核对不上等情况才停止全部自动检查，并一定发通知。平台限流等待最长按 6 小时计。
 - **少查接口**：切换网络约 3 秒后查询 Po0；网络不变时每 10 分钟（设置里可调为 2–59 分钟）只在本机对比出口 IP，变化了或满一小时才查询 Po0。手动检查随时可用；失败自动退避，并遵守平台的限流要求。系统休眠时可能延后。
 - Android 12+ 读取 Wi-Fi 名称需要精确位置权限（不获取位置）。固定网络要在后台自动更新，还需在槽位的“后台识别”中把位置权限设为“始终允许”，否则只在打开应用时识别；移动数据槽不需要。Android 9–11 请使用手动更新。
 
@@ -98,7 +100,7 @@ Token 由 Android Keystore 加密；状态和 Wi-Fi 授权存放在不参与备�
 ```sh
 sh scripts/build.sh :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
 sh scripts/package.sh
-(cd dist && shasum -a 256 -c SHA256SUMS-runtime08)
+(cd dist && shasum -a 256 -c SHA256SUMS-runtime*)
 ```
 
 产物在 `dist/`，文件名中的版本号取自 `app/build.gradle.kts`。
@@ -111,7 +113,7 @@ sh scripts/test-emulator.sh
 
 ### 自动构建与发布
 
-GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在每次推送和 Pull Request 时运行核心测试与 Lint，构建 APK 和模块 ZIP，并分别在 macOS / Windows 上测试和打包桌面端，结果可在 Actions 页面下载（保留 30 天）。
+GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在每次推送和 Pull Request 时运行核心测试与 Lint，构建 APK 和模块 ZIP，在模拟器上跑 Android 界面测试，并分别在 macOS / Windows 上测试和打包桌面端，结果可在 Actions 页面下载（保留 30 天）。
 
 发布新版本：
 
@@ -119,7 +121,7 @@ GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）
 2. 提交并推送后打标签：`git tag v<版本号> && git push origin v<版本号>`（与 `versionName` 一致）
 3. Actions 会自动创建一个**草稿** Release 并附上全部文件。检查说明后点击 Publish 即可公开。
 
-签名：已发布版本都用同一个开发证书签名（SHA-256 `f6a7aff…26be`），手机才能覆盖升级，模块也只信任这个证书。Actions 从仓库 Secret `DEBUG_KEYSTORE_BASE64` 读取该密钥；未配置时只能生成临时签名的测试包，打标签发布会直接失败。
+签名：已发布版本都用同一个开发证书签名（SHA-256 `f6a7aff…26be`），手机才能覆盖升级，模块也只信任这个证书。Actions 从仓库 Secret `DEBUG_KEYSTORE_BASE64` 读取该密钥，只用于签 Preview 包；未配置时只能生成临时签名的测试包，打标签发布会直接失败。可调试的 debug 包不发布，CI 里也不用这个密钥签，避免被装到正式版上读出数据。
 
 ### 工程结构
 
@@ -128,6 +130,6 @@ GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）
 - `module/`：Magisk / KernelSU 辅助触发模块
 - `scripts/`：构建、打包与模拟器测试
 
-旧的 Profile / Budget 与 SlotPlan 仅用于兼容历史数据；当前统一使用 SlotLayout / LayoutSync。
+0.5 之前的两槽配置（SlotPlan）只在读取时迁移；当前统一使用 SlotLayout / LayoutSync，两端控制器共用 core 里的 CheckFlow / Alerts 规则。
 
-更多文档：[槽位说明](docs/SLOTS.md) · [安装与恢复](docs/INSTALL.md) · [测试说明](docs/TESTING.md) · [改造报告](docs/IMPLEMENTATION.md)
+更多文档：[槽位说明](docs/SLOTS.md) · [安装与恢复](docs/INSTALL.md) · [测试说明](docs/TESTING.md) · [0.5 改造记录（历史）](docs/IMPLEMENTATION.md)

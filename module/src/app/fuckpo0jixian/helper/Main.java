@@ -48,13 +48,17 @@ public final class Main {
     private static String recoveryEpoch = "";
     private static FileObserver moduleObserver, configObserver;
     private static final Runnable wake = () -> trigger("network");
-    // Fallback cadence matches the APK: every 10 minutes the APK compares its exit locally and only asks Po0 on change.
-    private static final long FALLBACK_MS = 10 * 60_000;
+    // Fallback cadence follows the APK's own setting (2–59 minutes, published in runtime-v1.json; 10 when absent):
+    // on each tick the APK compares its exit locally and only asks Po0 on change.
+    private static volatile long fallbackMs = 10 * 60_000;
     private static final Runnable fallback = new Runnable() { public void run() {
-        handler.postDelayed(this, FALLBACK_MS);
+        handler.postDelayed(this, fallbackMs);
         trigger("fallback");
     } };
-    /** APK versionCode this module was packaged for; package.sh keeps module.prop and the APK in step. */
+    /**
+     * Oldest APK versionCode this module works with (the one it was packaged with). A newer APK is accepted as long as
+     * it speaks the same runtime protocol, so an in-app APK update does not disable the module until it is updated too.
+     */
     private static long expectedVersion = -1;
     public static void main(String[] args) throws Exception {
         if (android.os.Process.myUid() != 0 || args.length != 0) return;
@@ -107,7 +111,7 @@ public final class Main {
         }
         // Lifecycle watchdog: no HTTP, no network probing, no wake lock.
         handler.post(new Runnable() { public void run() { lifecycle(); handler.postDelayed(this, 60_000); } });
-        handler.postDelayed(fallback, FALLBACK_MS);
+        handler.postDelayed(fallback, fallbackMs);
         Looper.loop();
         lock.release(); lockFile.close();
     }
@@ -126,12 +130,18 @@ public final class Main {
             if (!DIR.isDirectory() || new File(DIR, "disable").exists() || new File(DIR, "remove").exists()) return "DISABLED";
             PackageInfo p = identity();
             if ((p.applicationInfo.flags & ApplicationInfo.FLAG_STOPPED) != 0) return "STOPPED";
-            if (expectedVersion < 0 || p.getLongVersionCode() != expectedVersion) return "VERSION";
+            if (expectedVersion < 0 || p.getLongVersionCode() < expectedVersion) return "VERSION";
             if (!context.getSystemService(UserManager.class).isUserUnlocked()) return "LOCKED";
             File config = new File(p.applicationInfo.dataDir, "no_backup/runtime-v1.json");
             if (!config.isFile() || config.length() > 1024) return "STOPPED";
             JSONObject data = new JSONObject(new String(Files.readAllBytes(config.toPath()), java.nio.charset.StandardCharsets.UTF_8));
             if (data.getInt("protocol") != 1) return "VERSION";
+            long minutes = Math.max(2, Math.min(59, data.optInt("fallbackMinutes", 10)));
+            if (minutes * 60_000 != fallbackMs) {
+                fallbackMs = minutes * 60_000;
+                handler.removeCallbacks(fallback);
+                handler.postDelayed(fallback, fallbackMs);
+            }
             String next = data.getString("instance");
             if (!next.matches("[a-f0-9-]{36}")) return "IDENTITY";
             if (!instance.equals(next)) { instance = next; ticket = ""; }

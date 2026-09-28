@@ -150,11 +150,18 @@ rm -rf "${'$'}RECOVERY"
 xattr -dr com.apple.quarantine "${'$'}APP" 2>/dev/null
 open "${'$'}APP"
 """
-        /** Per-user MSI: upgrades in place (same UpgradeCode) with a progress bar and no UAC prompt. */
-        const val WINDOWS_SCRIPT = """param([int]${'$'}Owner, [string]${'$'}Msi, [string]${'$'}App)
-try { Wait-Process -Id ${'$'}Owner -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+        /**
+         * Per-user MSI: upgrades in place (same UpgradeCode) with a progress bar and no UAC prompt. Like the Mac script it
+         * installs only once the app has really exited, and it reopens the app either way: after a failed msiexec the
+         * previous version is still installed.
+         */
+        const val WINDOWS_SCRIPT = """param([int]${'$'}Owner, [string]${'$'}Msi, [string]${'$'}App, [int]${'$'}WaitMs = 60000)
+${'$'}running = Get-Process -Id ${'$'}Owner -ErrorAction SilentlyContinue
+if (${'$'}running -and -not ${'$'}running.WaitForExit(${'$'}WaitMs)) { 'Owner still running; installation aborted'; exit 1 }
 ${'$'}p = Start-Process msiexec.exe -ArgumentList "/i `"${'$'}Msi`" /passive /norestart" -Wait -PassThru
 "msiexec exit ${'$'}(${'$'}p.ExitCode)"
+# 0: installed; 3010: installed, restart pending. Anything else leaves the previous version in place.
+if (${'$'}p.ExitCode -ne 0 -and ${'$'}p.ExitCode -ne 3010) { 'Installation failed; reopening the installed version' }
 Start-Process -FilePath ${'$'}App
 """
     }

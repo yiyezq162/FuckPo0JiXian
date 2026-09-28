@@ -1,3 +1,19 @@
+# 0.8.4-preview 审查修复验证（2026-09-28）
+
+本轮修复一次代码审查列出的 20 项问题，随 0.8.4-preview（versionCode 19）发布；没有访问真实 Po0 账户，也没有在真机上安装。从旧版升级时需要最后再更新一次模块，此后更新 APK 不必同步更新模块。
+
+| 范围 | 改动 | 证据 |
+| --- | --- | --- |
+| 保护与恢复 | 写入前的读取异常改为退避重试；全局保护一进入就通知，读取异常连续 3 次才通知；没有待确认写入时，复核接受已标注的其他设备 / 共管槽的非空替换；网络变化或设置改动打断检查不算失败；Retry-After 最长按 6 小时计，读取旧状态时也会截断；手动确认只等服务器的限流 | `LayoutSyncTest`、`DeadlineAndAlertTest`、`CheckFlowTest` |
+| 结构 | 删除 Profile/Budget/Allocation、SlotSync、SlotConfiguration 和非槽位 Engine 路径（状态文件仍写入空的旧字段，旧版本能读）；两端控制器共用 `CheckFlow`/`Alerts`；网络类型改用 `NetworkKind` 常量，不再用界面文案判断 | `EngineTest`、`LegacyPlanTest`、`ModelTest` |
+| 账户 | 官方链接里的服务器地址随 Token 保存；换服务器视为换账户 | `Po0ConfigurationTest`、`AccountCredentialsTest` |
+| 更新与发布 | 正式版比同号的 preview 新；桌面安装包主版本号整体加一，保证顺序；Windows 脚本在应用未退出时中止，并检查 msiexec 退出码；不再发布 debug APK，CI 只用发布密钥签 Preview 包 | `UpdatesTest`、`WindowsUpdateSafetyTest`（仅在 Windows CI 上运行）、apksigner 核对 |
+| 模块 | 接受不旧于模块、且协议相同的 APK；兜底间隔跟随应用设置；安装提示显示 module.prop 里的版本 | helper 编译、`sh -n` 语法检查；未在真机安装 |
+| 桌面轮询 | 每 5 秒只在进程内列出网卡；route/arp 只在网卡变化、休眠唤醒后或每 30 秒读取一次 | 编译通过；尚未在真机上长时间观察 |
+| Android 界面 | 「多设备」里新增「允许截图」开关，默认关闭 | 模拟器上手动切换：打开后截图可见，关闭后恢复黑屏 |
+
+结果：core 116 项、desktop 35 项（1 项为 Windows 专用，已跳过）全部通过；Debug / Preview / AndroidTest 构建和 Preview Lint 通过；`package.sh` 打包成功，Preview 签名仍为 `f6a7aff…26be`；专用模拟器 `emulator-5580` 上常规套件 26 项、`ReviewSafetyUiTest` 与 `KeepAliveTest` 共 4 项通过。新增的 CI 模拟器任务要等下次推送才能验证。
+
 # 0.8.3-preview 安全修复验证（2026-09-28）
 
 本节记录安全修复在 0.8.2/versionCode 17 工作树完成的本地验证，发布版本为 0.8.3-preview/versionCode 18。版本提升不将本地测试变成真实安装升级验收；CI 发布状态以该标签的 GitHub Actions 和 Release 为准。下面 0.6 / 0.5 报告仅保留为各自版本的历史证据，不能替代本节故障覆盖。所有新增请求测试使用虚构 Token、假平台/Transport 和确定性时钟；Mac 安装脚本只在 macOS 临时目录运行，Windows 明确跳过这 5 项，hdiutil/ditto/mv/open 等由模拟命令控制。

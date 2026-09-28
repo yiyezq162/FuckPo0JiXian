@@ -7,14 +7,17 @@ android {
         applicationId = "app.fuckpo0jixian"
         minSdk = 28
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.8.3-preview"
+        versionCode = 19
+        versionName = "0.8.4-preview"
         testInstrumentationRunner = "app.fuckpo0jixian.SafeTestRunner"
     }
     buildFeatures { compose = true }
     signingConfigs {
-        // CI passes the published development key explicitly; local builds keep using ~/.android/debug.keystore.
-        System.getenv("FUCKPO0JIXIAN_KEYSTORE")?.let { path -> getByName("debug") { storeFile = file(path) } }
+        // CI passes the published development key explicitly, for the preview build only: a debuggable build signed
+        // with it could be installed over the real app and expose its data. Local builds keep ~/.android/debug.keystore.
+        System.getenv("FUCKPO0JIXIAN_KEYSTORE")?.let { path -> create("published") {
+            storeFile = file(path); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android"
+        } }
     }
     buildTypes {
         create("preview") {
@@ -23,7 +26,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             // Test prerelease: same development certificate permits in-place upgrades.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("published") ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             matchingFallbacks += "release"
         }

@@ -51,7 +51,8 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
         if (!RuntimePolicy.enabled(s)) proof.delete()
         val bytes = JSONObject().put("protocol", RuntimePolicy.PROTOCOL).put("instance", instance)
             .put("gate", gate).put("generation", generation)
-            .put("enabled", RuntimePolicy.enabled(s)).toString().toByteArray()
+            .put("enabled", RuntimePolicy.enabled(s)).put("fallbackMinutes", FallbackInterval.clamp(s.fallbackMinutes))
+            .toString().toByteArray()
         val out = file.startWrite()
         try { out.write(bytes); file.finishWrite(out) } catch (e: Exception) { file.failWrite(out); throw e }
         refresh(s)

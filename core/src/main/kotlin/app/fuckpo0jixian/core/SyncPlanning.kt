@@ -9,6 +9,43 @@ object SyncPlanning {
         (code in setOf("RATE_LIMITED", "BUSY") || (state.failures > 0 && code == state.status && code !in setOf("NO_TOKEN", "NETWORK_CHANGED", "CANCELLED_NETWORK_OR_SETTINGS")))
 }
 
+/** A problem worth a system notification after a check. [marker], when set, is remembered so it is sent once per configuration. */
+data class Attention(val code: String, val marker: String?)
+
+object Alerts {
+    /** Checks stop on these for one slot or one account until someone acts. */
+    val issues = setOf("HTTP_401", "HTTP_403", "CAPACITY_FULL", "SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "COVERED_OTHER_SLOT",
+        "IDENTITY_AMBIGUOUS", "PENDING_REVIEW")
+    /** Read errors retry on their own; they deserve a notification only once they keep coming back. */
+    private val lasting = setOf("INVALID_RESPONSE", "SLOT_INVALID", "PLATFORM_DISABLED")
+    const val LASTING_FAILURES = 3
+
+    /**
+     * What to tell people after a check that started from [before]. Entering a global block always notifies: every
+     * automatic check has stopped, and nobody would notice otherwise.
+     */
+    fun after(before: State, code: String, after: State): Attention? {
+        val version = after.layout?.version
+        return when {
+            before.globalBlock == null && after.globalBlock != null -> Attention(after.globalBlock, null)
+            after.layout == null -> null
+            code in issues -> Attention(code, "NOTIFIED:$code:$version")
+            code in lasting && after.failures >= LASTING_FAILURES -> Attention(code, "NOTIFIED:$code:$version")
+            else -> null
+        }
+    }
+
+    /** Records [alert]'s marker; true when people should be told, i.e. it was not sent for this configuration yet. */
+    fun claim(store: StateStore, alert: Attention): Boolean {
+        val marker = alert.marker ?: return true
+        val latest = store.load()
+        val layout = latest.layout ?: return false
+        if (marker in layout.notices) return false
+        store.save(latest.copy(layout = layout.copy(notices = (layout.notices + marker).toList().takeLast(100).toSet())))
+        return true
+    }
+}
+
 /** Outcomes after which nothing changes until the exit, network or configuration does. */
 private val settled = setOf("SLOT_CURRENT", "SLOT_UPDATED", "PRESENT_CURRENT_CHECK", "RECOVERED_VERIFIED", "NO_TARGET",
     "MOBILE_MATCH", "UNKNOWN_WIFI", "COVERED_OTHER_SLOT", "SLOT_NOT_LOCAL", "TEMPORARY_HOLD", "UNMANAGED")
@@ -77,4 +114,46 @@ object NetworkHistory {
             FamiliarNetwork(cidr, days, count, rows.last().time, (days >= 2 && span >= 12 * 3_600_000L) || count >= 3)
         }.sortedWith(compareByDescending<FamiliarNetwork> { it.common }.thenByDescending { it.days }.thenByDescending { it.visits }.thenByDescending { it.lastSeen })
     }
+}
+
+/** Decisions both apps' controllers make around a check, kept in one place so the two cannot drift apart. */
+object CheckFlow {
+    /** How long a manual update confirmation stays valid. */
+    const val PERMIT_MS = 180_000L
+
+    /** Whether this check may write, so it needs a fresh exit observation first. */
+    fun mayWrite(s: State, observeOnly: Boolean, manual: Boolean, previewing: Boolean, permit: ManualPermit?, now: Long): Boolean =
+        (!observeOnly || previewing) && (s.mode == Mode.AUTO || permit != null || previewing) && s.layout != null &&
+            !s.paused && !s.authBlocked && s.globalBlock == null && s.requestAllowed(now, manual)
+
+    /** The exit observed on [networkKey] recently enough to count as evidence for a write, if any. */
+    fun freshExit(s: State, networkKey: String, now: Long, policy: Policy = Policy()): Cidr? = s.domesticExit?.takeIf {
+        it.networkKey == networkKey && now - it.time in 0 until policy.freshnessMs && s.probeStatus == "PROBE_OBSERVED"
+    }?.cidr
+
+    /** A confirmation for a manual update of [slot], or null when the preview check does not allow one. */
+    fun permit(code: String, after: State, slot: Int, networkKey: String, wifi: WifiObservation?, observed: Cidr?,
+               stillCurrent: Boolean, now: Long): ManualPermit? {
+        val target = after.layout?.slots?.find { it.number == slot } ?: return null
+        val snapshot = after.snapshot ?: return null
+        val allowed = code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING") && !after.paused && target.purpose == SlotPurpose.FIXED &&
+            target.writer == Writer.LOCAL && target.authorized && observed == snapshot.current && stillCurrent
+        return if (allowed) ManualPermit(after.accountContext, after.layout.version, slot, networkKey, wifi, snapshot, now + PERMIT_MS) else null
+    }
+
+    /**
+     * How long a confirmed manual update waits before it runs. Manual checks skip the loop guard and local backoff,
+     * so only a server-imposed wait holds it; null when that outlasts the confirmation, which would only expire.
+     */
+    fun confirmWait(s: State, permit: ManualPermit, now: Long): Long? =
+        (s.serverDeadline() - now).coerceAtLeast(0).takeIf { now + it <= permit.expires }
+
+    /** After a check that reached Po0, observe the exit again when it is stale for this network, or when asked by hand. */
+    fun refreshExit(before: State, after: State, networkKey: String, manual: Boolean, now: Long, policy: Policy = Policy()): Boolean =
+        !after.paused && after.lastCheck > before.lastCheck && now >= after.nextProbeAllowed &&
+            (manual || after.domesticExit?.networkKey != networkKey || now - (after.domesticExit?.time ?: 0) >= policy.cacheMs)
+
+    /** A read-only check found the exit missing while automatic sync is on: follow with a full check. */
+    fun syncAfterReading(code: String, after: State, observeOnly: Boolean, previewing: Boolean): Boolean =
+        observeOnly && !previewing && after.mode == Mode.AUTO && after.layout != null && !after.paused && code == "OBSERVED_MISSING"
 }

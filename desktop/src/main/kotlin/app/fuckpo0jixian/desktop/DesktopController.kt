@@ -9,12 +9,15 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * Desktop counterpart of the Android controller. The desktop stays on while it runs, so instead of system wake-ups
- * it polls the local network every few seconds (no Po0 request) and applies the same 3 s / fallback / 1 h cadence;
- * the fallback interval is the device's own setting (2–59 minutes, 10 by default).
+ * it watches the local network (no Po0 request) and applies the same 3 s / fallback / 1 h cadence; the fallback
+ * interval is the device's own setting (2–59 minutes, 10 by default). Every few seconds it only lists the interfaces
+ * in-process; the route and router are read again when that list changes, after sleep, and every [FULL_READ_MS].
  */
 class DesktopController(val store: FileStore = FileStore(), val vault: TokenVault = TokenVault.create(),
                         /** Seams for tests; the app always uses the real network and bound sockets. */
                         private val network: () -> DesktopLink = DesktopNetwork::read,
+                        /** Cheap in-process change hint; when it moves, [network] is read again. */
+                        private val hint: () -> String = DesktopNetwork::fingerprint,
                         /** Public IPv4 seen directly from the LAN interface, or null to fall back to the HTTPS probe. */
                         private val stun: (localIp: String) -> String? = Stun::query,
                         private val now: () -> Long = System::currentTimeMillis,
@@ -61,13 +64,20 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         var lastKey: String? = null
         var lastTick = now()
         var lastFallback = lastTick
+        var lastHint: String? = null
+        var lastRead = 0L
+        var current: DesktopLink? = null
         while (currentCoroutineContext().isActive) {
-            val current = runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()
-            link.value = current
             val t = now()
             // A long gap between ticks means the computer slept; the network may have changed underneath.
             val woke = t - lastTick > 60_000
             lastTick = t
+            val hinted = runCatching { withContext(Dispatchers.IO) { hint() } }.getOrNull()
+            if (hinted == null || hinted != lastHint || woke || t - lastRead >= FULL_READ_MS) {
+                lastHint = hinted; lastRead = t
+                current = runCatching { withContext(Dispatchers.IO) { network() } }.getOrNull()
+                link.value = current
+            }
             if (current?.key != lastKey || woke) {
                 lastKey = current?.key
                 manualPreview.value = null
@@ -154,7 +164,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             val transport = transportFor(l.localIp!!, true)
             val permit = manualPreview.value
             fun same() = runCatching { network() }.getOrNull()?.key == l.key
-            var session = NetworkSession(l.key, l.kind, false, wifi = l.observation(now()), manualPermit = permit) { same() }
+            var session = NetworkSession(l.key, l.kind, wifi = l.observation(now()), manualPermit = permit) { same() }
             if (fallback && !manual && !observeOnly) {
                 // Every tick compares the exit again; Po0 only hears about it when something moved.
                 if (LocalCheck.fallbackProbe(store.load(), l.key, now(), policy)) updateDomestic(l)
@@ -162,15 +172,10 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                     feedback.value = statusText("LOCAL_UNCHANGED"); return "LOCAL_UNCHANGED"
                 }
             }
-            val platform = Po0Platform(vault::read, transport)
-            if ((!observeOnly || previewSlot != null) && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null &&
-                !s.paused && !s.authBlocked && s.globalBlock == null && s.requestAllowed(now(), manual)) {
-                val d = store.load().domesticExit
-                val fresh = d != null && d.networkKey == l.key && now() - d.time < policy.freshnessMs
-                if (!fresh && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
-                val observed = store.load().domesticExit?.takeIf {
-                    it.networkKey == l.key && now() - it.time < policy.freshnessMs && store.load().probeStatus == "PROBE_OBSERVED"
-                }?.cidr
+            val platform = Po0Platform(vault::read, transport, endpoint = s.endpoint)
+            if (CheckFlow.mayWrite(s, observeOnly, manual, previewSlot != null, permit, now())) {
+                if (CheckFlow.freshExit(store.load(), l.key, now(), policy) == null && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
+                val observed = CheckFlow.freshExit(store.load(), l.key, now(), policy)
                 session = session.copy(observedCidr = observed, revalidate = {
                     val again = withContext(Dispatchers.IO) { network() }
                     val exit = observeExit(l, now())
@@ -180,34 +185,18 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
             if (!observeOnly) manualPreview.value = null
             val after = store.load()
-            previewSlot?.let { number ->
-                val slot = after.layout?.slots?.find { it.number == number }
-                if (code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING") && !after.paused && slot?.purpose == SlotPurpose.FIXED &&
-                    slot.writer == Writer.LOCAL && slot.authorized && session.observedCidr == after.snapshot?.current && same()) {
-                    manualPreview.value = ManualPermit(after.accountContext, after.layout!!.version, number, l.key, session.wifi,
-                        after.snapshot!!, now() + 180_000)
-                } else feedback.value = "无法预览：请确认已恢复检查、此槽已授权且出口未变"
-            }
-            if (!after.paused && after.lastCheck > s.lastCheck && now() >= after.nextProbeAllowed &&
-                (manual || after.domesticExit?.networkKey != l.key || now() - (after.domesticExit?.time ?: 0) >= policy.cacheMs)) {
-                updateDomestic(l)
-            }
             feedback.value = statusText(code)
-            if (!manual && SyncPlanning.needsFollowUp(code, store.load())) scheduleFollowUp()
-            if (observeOnly && after.mode == Mode.AUTO && after.layout != null && !after.paused && code == "OBSERVED_MISSING" && previewSlot == null)
-                scheduleFollowUp()
-            if (code in listOf("HTTP_401", "HTTP_403", "CAPACITY_FULL", "SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "COVERED_OTHER_SLOT",
-                    "IDENTITY_AMBIGUOUS", "PENDING_REVIEW", "SHARED_RECENT")) {
-                val latest = store.load()
-                val marker = "NOTIFIED:$code:${latest.layout?.version}"
-                if (latest.layout != null && marker !in latest.layout!!.notices) {
-                    store.save(latest.copy(layout = latest.layout!!.copy(notices = (latest.layout!!.notices + marker).toList().takeLast(100).toSet())))
-                    if (notify.value) alerts.tryEmit(desktopText(code))
-                }
+            previewSlot?.let { number ->
+                manualPreview.value = CheckFlow.permit(code, after, number, l.key, session.wifi, session.observedCidr, same(), now())
+                if (manualPreview.value == null) feedback.value = "无法预览：请确认已恢复检查、此槽已授权且出口未变"
             }
+            if (CheckFlow.refreshExit(s, after, l.key, manual, now(), policy)) updateDomestic(l)
+            if (!manual && SyncPlanning.needsFollowUp(code, store.load())) scheduleFollowUp()
+            if (CheckFlow.syncAfterReading(code, after, observeOnly, previewSlot != null)) scheduleFollowUp()
+            Alerts.after(s, code, store.load())?.let { if (Alerts.claim(store, it) && notify.value) alerts.tryEmit(desktopText(it.code)) }
             return code
         } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { feedback.value = "无法读取本地数据，已停止检查"; return "LOCAL_ERROR" }
+        catch (_: Exception) { feedback.value = "本次检查出错，请稍后重试"; return "LOCAL_ERROR" }
         finally { busy.value = false; gate.unlock() }
     }
 
@@ -279,11 +268,19 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         val permit = manualPreview.value ?: return
         if (operation?.isActive == true) return
         operation = scope.launch {
+            // A server wait still holds; the confirmation expires rather than replaying offline.
+            val wait = CheckFlow.confirmWait(store.load(), permit, now())
+            if (wait == null) { feedback.value = statusText("HTTP_429"); manualPreview.value = null; return@launch }
             feedback.value = "已确认，即将更新"
-            delay((store.load().nextAllowed - now()).coerceAtLeast(0))
+            delay(wait)
             if (manualPreview.value == permit) runCheck(true)
             manualPreview.value = null
         }
     }
     fun stop() { scope.cancel() }
+
+    companion object {
+        /** A router swapped behind an unchanged address is noticed within this long. */
+        const val FULL_READ_MS = 30_000L
+    }
 }

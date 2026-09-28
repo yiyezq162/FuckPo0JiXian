@@ -93,7 +93,7 @@ class UiTest {
         val persisted = LocalStore(rule.activity).load()
         assertEquals("OBSERVED_MISSING", persisted.status)
         assertEquals(5, persisted.snapshot!!.entries.size)
-        assertTrue(persisted.ownership.isEmpty())
+        assertTrue(persisted.layout!!.slots.none { it.status == "SLOT_UPDATED" })
         // A second manual press runs straight away: manual checks skip the automatic loop guard.
         val first = controller.store.load().lastCheck
         rule.onNodeWithText("立即检查").performClick()
