@@ -87,12 +87,17 @@ class UpdatesTest {
         assertEquals("UPDATE_NO_CHECKSUM", assertFailsWith<ApiFailure> { unsummed.download(update, dir) }.code)
     }
 
-    /** Opt-in: FUCKPO0JIXIAN_LIVE=1 reads the real release list. */
-    @Test fun liveReleaseListParses() {
+    /** Opt-in: FUCKPO0JIXIAN_LIVE=1 reads the real release list and downloads the newest APK, verified. */
+    @Test fun liveReleaseDownloadVerifies() {
         if (System.getenv("FUCKPO0JIXIAN_LIVE") != "1") return
-        val releases = UpdateClient("FuckPo0JiXian-test").releases()
-        assertTrue(releases.isNotEmpty())
-        val update = Updates.pick(releases, "0.7.0-preview", Updates::androidAsset)!!
-        println("latest ${update.version} ${update.asset.name} sha=${update.asset.sha256}")
+        val client = UpdateClient("FuckPo0JiXian-test")
+        val update = client.check("0.7.0-preview", Updates::androidAsset)!!
+        val file = client.download(update, Files.createTempDirectory("live").toFile())
+        println("latest ${update.version} ${file.name} ${file.length()} bytes sha=${Updates.sha256(file)}")
+        assertEquals(update.asset.sha256 ?: client.expectedSha(update), Updates.sha256(file))
+        for (platform in listOf("macos" to "arm64" to "dmg", "windows" to "x64" to "msi")) {
+            val (pa, ext) = platform
+            assertNotNull(client.check("0.7.0-preview") { Updates.desktopAsset(it, pa.first, pa.second, ext) }, "$pa installer in the release")
+        }
     }
 }
