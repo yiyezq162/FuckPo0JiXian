@@ -23,7 +23,7 @@ final class Gateway {
         void note(String kind, String detail);
     }
 
-    private static final long POLL_MS = 30_000, PRIVATE_POLL_MS = 5 * 60_000, REDISCOVER_MS = 30 * 60_000;
+    private static final long POLL_MS = 30_000, RETRY_MS = 5 * 60_000, REDISCOVER_MS = 30 * 60_000;
     private static final Pattern SERVICE = Pattern.compile("<service>(.*?)</service>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
     private static final Pattern TYPE = Pattern.compile("<serviceType>\\s*(urn:schemas-upnp-org:service:WAN(?:IP|PPP)Connection:\\d)\\s*</serviceType>", Pattern.CASE_INSENSITIVE);
     private static final Pattern CONTROL = Pattern.compile("<controlURL>\\s*([^<\\s]+)\\s*</controlURL>", Pattern.CASE_INSENSITIVE);
@@ -84,7 +84,7 @@ final class Gateway {
             } else if (++failures >= 3) {
                 listener.note("GATEWAY", method + " stopped answering; rediscovering");
                 method = null; control = null; service = null; failures = 0; status = "DISCOVERING";
-                schedule(PRIVATE_POLL_MS);
+                schedule(RETRY_MS);
             } else schedule(POLL_MS);
             return;
         }
@@ -93,10 +93,11 @@ final class Gateway {
         status = method + (inner ? "_PRIVATE" : "");
         String previous = wan;
         wan = observed;
-        if (previous == null) listener.note("GATEWAY", method + " wan=" + observed + (inner ? " (router behind another NAT)" : ""));
+        if (previous == null) listener.note("GATEWAY", method + " wan=" + observed + (inner ? " (private: carrier NAT or another router)" : ""));
         else if (!previous.equals(observed)) listener.changed(observed, previous, method);
-        // A router behind another NAT (e.g. the ISP modem in router mode) rarely moves; ask less often.
-        schedule(inner ? PRIVATE_POLL_MS : POLL_MS);
+        // A private WAN address still moves on a redial when the carrier assigned it (carrier NAT), so keep asking;
+        // one NAT-PMP / UPnP exchange on the LAN every 30 s costs next to nothing.
+        schedule(POLL_MS);
     }
 
     private String discover() throws IOException {

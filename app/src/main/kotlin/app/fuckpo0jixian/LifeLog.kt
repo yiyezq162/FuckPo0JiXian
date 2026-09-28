@@ -47,7 +47,8 @@ object LifeLog {
     /** Most recent lines, oldest first. */
     fun recent(limit: Int = KEEP): List<String> = synchronized(lock) {
         if (!::file.isInitialized) return emptyList()
-        runCatching { file.readLines() }.getOrDefault(emptyList()).filter { it.isNotBlank() }.sorted().takeLast(limit)
+        // By time only, and stably: lines of the same second keep the order they were written in.
+        runCatching { file.readLines() }.getOrDefault(emptyList()).filter { it.isNotBlank() }.sortedBy { it.substringBefore(' ') }.takeLast(limit)
     }
 
     /** Process start: first the system's records of how earlier processes ended, then this start's conditions. */

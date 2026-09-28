@@ -2,7 +2,7 @@ package app.fuckpo0jixian.core
 
 enum class ProbeSource(val url: String) {
     IP3322("https://ip.3322.net"), IPV4_IPW("https://4.ipw.cn"), IPIP("https://myip.ipip.net"),
-    /** Desktop: STUN binding over the LAN interface; not an HTTP source. */
+    /** STUN binding over the physical network (desktop LAN interface, Android bound socket); not an HTTP source. */
     STUN("stun:stun.miwifi.com")
 }
 data class DomesticExit(val ipv4: String, val time: Long, val networkKey: String, val source: ProbeSource = ProbeSource.IPIP) {

@@ -1,7 +1,7 @@
 id=fuckpo0jixian_helper
 name=去他妈的鸡险 · FuckPo0JiXian 辅助入口
-version=0.8.6-preview
-versionCode=21
+version=0.8.7-preview
+versionCode=22
 author=FuckPo0JiXian
 description=辅助后台唤起：底层网络或路由器出口变化时唤起去他妈的鸡险检查，并让它免于电池优化。不保存 Token，不能保证永久保活或休眠时及时同步。（如果您不知道这个是什么，那么就不用理会）
 updateJson=https://raw.githubusercontent.com/yiyezq162/FuckPo0JiXian/main/module/update.json

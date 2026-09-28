@@ -145,12 +145,21 @@ class TrayMenu(s: app.fuckpo0jixian.core.State, busy: Boolean, val update: Strin
     val pauseLabel = if (s.paused) "恢复检查" else "暂停检查"
 }
 
-/** Windows 11: dark title bar in dark mode and a caption colour matching the window, so both read as one surface. */
+/**
+ * Windows 11: dark title bar in dark mode and a caption colour matching the window, so both read as one surface.
+ * The title bar draws neither the small icon nor the title: the sidebar already shows both, larger. The taskbar
+ * and Alt+Tab still get them from the window.
+ */
 private object WindowsTitleBar {
     private interface Dwm : com.sun.jna.Library {
         fun DwmSetWindowAttribute(hwnd: com.sun.jna.platform.win32.WinDef.HWND, attribute: Int, value: com.sun.jna.ptr.IntByReference, size: Int): Int
     }
+    private interface UxTheme : com.sun.jna.Library {
+        /** WTA_OPTIONS is { dwFlags, dwMask }. */
+        fun SetWindowThemeAttribute(hwnd: com.sun.jna.platform.win32.WinDef.HWND, attribute: Int, options: IntArray, size: Int): Int
+    }
     private val dwm by lazy { runCatching { com.sun.jna.Native.load("dwmapi", Dwm::class.java) }.getOrNull() }
+    private val uxtheme by lazy { runCatching { com.sun.jna.Native.load("uxtheme", UxTheme::class.java) }.getOrNull() }
     fun match(window: java.awt.Window, dark: Boolean, color: androidx.compose.ui.graphics.Color) {
         val handle = (window as? androidx.compose.ui.awt.ComposeWindow)?.windowHandle ?: return
         val hwnd = com.sun.jna.platform.win32.WinDef.HWND(com.sun.jna.Pointer(handle))
@@ -159,6 +168,8 @@ private object WindowsTitleBar {
             val bgr = ((color.blue * 255).toInt() shl 16) or ((color.green * 255).toInt() shl 8) or (color.red * 255).toInt()
             dwm?.DwmSetWindowAttribute(hwnd, 35, com.sun.jna.ptr.IntByReference(bgr), 4) // DWMWA_CAPTION_COLOR (Windows 11)
         }
+        // WTA_NONCLIENT with WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON.
+        runCatching { uxtheme?.SetWindowThemeAttribute(hwnd, 1, intArrayOf(3, 3), 8) }
     }
 }
 

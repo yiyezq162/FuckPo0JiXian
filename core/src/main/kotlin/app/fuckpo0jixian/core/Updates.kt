@@ -22,6 +22,12 @@ sealed interface UpdateState {
     data class Downloading(val update: Update, val fraction: Float?) : UpdateState
     data class Installing(val update: Update) : UpdateState
     data class Failed(val message: String, val update: Update? = null) : UpdateState
+
+    /** For logs: stable words, unlike class names, which R8 renames in release builds. */
+    val label: String get() = when (this) {
+        Idle -> "idle"; Checking -> "checking"; is Latest -> "latest"; is Available -> "available ${update.version}"
+        is Downloading -> "downloading ${update.version}"; is Installing -> "installing ${update.version}"; is Failed -> "failed $message"
+    }
 }
 
 /**

@@ -55,8 +55,11 @@ class ModuleInstaller(private val context: Context) {
                 }
                 val location = runCatching { keepCopy(zip) }.getOrNull()
                 val outcome = withContext(Dispatchers.Main) { hand(zip, location) }
-                LifeLog.add("MODULE_INSTALL ${outcome.javaClass.simpleName} ${(outcome as? ModuleInstallState.Opened)?.manager
-                    ?: (outcome as? ModuleInstallState.Saved)?.manager ?: ""}")
+                LifeLog.add("MODULE_INSTALL " + when (outcome) {
+                    is ModuleInstallState.Opened -> "opened in ${outcome.manager}"
+                    is ModuleInstallState.Saved -> "saved to ${outcome.location}, manager ${outcome.manager ?: "not found"}"
+                    else -> "done"
+                })
                 state.value = outcome
             } catch (e: CancellationException) { state.value = ModuleInstallState.Idle; throw e }
             catch (e: Exception) {

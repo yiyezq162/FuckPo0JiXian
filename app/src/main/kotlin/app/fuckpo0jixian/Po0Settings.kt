@@ -187,7 +187,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
 /** How the module reads the router's WAN address, in words. */
 private fun gatewayText(status: String?) = when (status) {
     "NATPMP" -> "经 NAT-PMP 读取"; "UPNP" -> "经 UPnP 读取"
-    "NATPMP_PRIVATE", "UPNP_PRIVATE" -> "路由器处于另一层 NAT 之后"
+    "NATPMP_PRIVATE", "UPNP_PRIVATE" -> "内网地址（运营商 NAT 或上级路由），重拨时通常也会变"
     "UNSUPPORTED" -> "路由器未开启 UPnP / NAT-PMP"
     "DISCOVERING" -> "正在查找路由器"
     "OFF" -> "连接 Wi-Fi 时读取"

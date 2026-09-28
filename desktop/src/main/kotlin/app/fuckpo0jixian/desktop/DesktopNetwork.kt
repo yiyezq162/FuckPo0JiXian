@@ -40,11 +40,29 @@ object DesktopNetwork {
         .map { i -> i.name + "=" + i.inetAddresses.toList().filterIsInstance<Inet4Address>().map { it.hostAddress }.sorted().joinToString(",") }
         .sorted().joinToString(";")
 
-    /** Runs the route and ARP commands; no request leaves the computer. */
+    /** What the last ARP lookup printed when it found no MAC (first line), for the debug export. */
+    @Volatile var arpMiss: String? = null
+        private set
+    private var primedAt = 0L
+
+    /** Runs the route and ARP commands; nothing leaves the LAN. */
     fun read(): DesktopLink {
         val route = runCatching { defaultRoute() }.getOrNull()
         val gateway = route?.gateway
-        val mac = gateway?.let { gw -> runCatching { gatewayMac(gw, route.iface) }.getOrNull() }
+        var mac = gateway?.let { gw -> runCatching { gatewayMac(gw, route.iface) }.getOrNull() }
+        // No MAC although there is a router: the ARP entry may have expired, or macOS is withholding it until the app
+        // may use the local network. One datagram to the router refreshes the entry and makes macOS ask for that
+        // permission (without it the router cannot be identified). At most once a minute.
+        if (route != null && gateway != null && mac == null && route.localIp != null && System.currentTimeMillis() - primedAt > 60_000) {
+            primedAt = System.currentTimeMillis()
+            runCatching {
+                java.net.DatagramSocket(java.net.InetSocketAddress(route.localIp, 0)).use { s ->
+                    s.send(java.net.DatagramPacket(ByteArray(1), 1, java.net.InetSocketAddress(gateway, 9)))
+                }
+                Thread.sleep(300)
+                mac = gatewayMac(gateway, route.iface)
+            }
+        }
         return DesktopLink(route?.iface, route?.localIp, gateway, mac)
     }
 
@@ -85,9 +103,11 @@ object DesktopNetwork {
     private fun interfaceIpv4(name: String): String? = NetworkInterface.getByName(name)?.inetAddresses?.toList()
         ?.filterIsInstance<Inet4Address>()?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }?.hostAddress
 
-    private fun gatewayMac(gateway: String, iface: String?): String? = when (os) {
-        Os.WINDOWS -> parseArp(run("arp", "-a", gateway), gateway, null)
-        else -> parseArp(run("arp", "-n", gateway), gateway, iface)
+    private fun gatewayMac(gateway: String, iface: String?): String? {
+        val output = if (os == Os.WINDOWS) run("arp", "-a", gateway) else run("arp", "-n", gateway)
+        return parseArp(output, gateway, if (os == Os.WINDOWS) null else iface).also { mac ->
+            arpMiss = if (mac != null) null else output.lines().firstOrNull { it.isNotBlank() }?.trim()?.take(120) ?: "(empty)"
+        }
     }
 
     internal fun parseMacRoute(output: String): Pair<String?, String?>? {

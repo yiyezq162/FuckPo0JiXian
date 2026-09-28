@@ -167,11 +167,12 @@ class MultiDeviceTest {
     @Test fun debugExportMasksAddressesAndWifiButKeepsNames() {
         val s = state(shared = true).copy(deviceName = "Mac", domesticExit = DomesticExit("192.0.2.77", clock, "n"),
             events = listOf(Event(clock, "SLOT_UPDATED")), observations = listOf(Observation(clock, home, "wifi")))
-        val text = DebugExport.build(s, mapOf("platform" to "macos", "app" to "0.8.6"), clock,
+        val text = DebugExport.build(s, mapOf("platform" to "android", "app" to "0.8.6", "rom" to "PKU110_16.0.3.500(CN01)"), clock,
             logs = mapOf("lifecycle" to listOf("2026-09-28T03:10:00Z NET wifi addrs=192.168.31.20 v6=2408:8207:1a2b:3c4d::/64 gw=a4:11:22:33:44:55")))
         listOf("192.0.2.", "198.51.100.", "203.0.113.", "192.168.31", "\"Home\"", ap, "a4:11:22:33:44:55", "1a2b:3c4d", "pgnfw_")
             .forEach { assertFalse(it in text, "leaked $it") }
-        listOf("192.0.*.*/24", "192.0.*.*", "192.168.*.*", "2408:8207:*", "03:10:00", "\"Mac\"", "\"家\"", "0.8.6", "SLOT_UPDATED")
+        listOf("192.0.*.*/24", "192.0.*.*", "192.168.*.*", "2408:8207:*", "03:10:00", "\"Mac\"", "\"家\"", "0.8.6", "SLOT_UPDATED",
+            "PKU110_16.0.3.500(CN01)")
             .forEach { assertTrue(it in text, "missing $it") }
         val tag = Redact.tag("Home", s.accountContext)!!
         assertTrue(tag in text); assertEquals(tag, Redact.tag("Home", s.accountContext)); assertNotEquals(tag, Redact.tag("Home", "other"))

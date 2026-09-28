@@ -276,7 +276,8 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             "arch" to System.getProperty("os.arch"), "java" to System.getProperty("java.version"),
             "autostart" to runCatching { Autostart.enabled() }.getOrNull()?.toString(), "notify" to notify.value.toString())
         val details = mapOf("link" to l?.let { "${it.kind} iface=${it.iface} ip=${it.localIp} gw=${it.gatewayIp} mac=${it.gatewayMac}" },
-            "busy" to busy.value.toString(), "update" to updater.state.value.javaClass.simpleName)
+            "arpMiss" to DesktopNetwork.arpMiss,
+            "busy" to busy.value.toString(), "update" to updater.state.value.label)
         return DebugExport.build(store.load(), device, now(), details = details,
             logs = mapOf("activity" to activity.recent(), "requests" to BoundTransport.trace()))
     }

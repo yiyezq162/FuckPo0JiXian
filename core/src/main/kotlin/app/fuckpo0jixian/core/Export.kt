@@ -71,8 +71,9 @@ object ShareExport {
 
 /**
  * 调试信息: everything that helps explain what happened and when, for development. No Token and no account
- * identifier; every address is cut to /16 by [Redact] over the finished text, and Wi-Fi names and access points
- * become per-installation tags. Device, slot and network names people typed are kept.
+ * identifier; every text value is passed through [Redact] (addresses to /16), and Wi-Fi names and access points
+ * become per-installation tags. Device, slot and network names people typed are kept. The platform facts in
+ * `device` (OS, ROM and Java versions) are left as they are, since version numbers look like addresses.
  * [device] adds platform facts (OS version, model, …); [logs] adds timelines such as the lifecycle log.
  */
 object DebugExport {
@@ -83,7 +84,7 @@ object DebugExport {
     fun build(s: State, device: Map<String, String?>, now: Long, logs: Map<String, List<String>> = emptyMap(),
               details: Map<String, String?> = emptyMap()): String {
         val salt = s.accountContext
-        val text = pretty.encodeToString(JsonObject.serializer(), buildJsonObject {
+        val tree = buildJsonObject {
             put("format", FORMAT); put("version", 1); put("note", NOTE)
             put("exportedAt", time(now))
             putJsonObject("device") { put("name", s.deviceName); device.forEach { (k, v) -> put(k, v) } }
@@ -128,8 +129,17 @@ object DebugExport {
             }) } }
             putJsonArray("events") { s.events.forEach { e -> add(buildJsonObject { put("time", time(e.time)); put("code", e.code) }) } }
             logs.filterValues { it.isNotEmpty() }.forEach { (name, lines) -> putJsonArray(name) { lines.forEach { add(it) } } }
+        }
+        val masked = JsonObject(tree.mapValues { (key, value) ->
+            if (key == "device") JsonObject(value.jsonObject.mapValues { (k, v) -> if (k == "name") redact(v) else v }) else redact(value)
         })
-        return Redact.text(text)
+        return pretty.encodeToString(JsonObject.serializer(), masked)
+    }
+
+    private fun redact(e: JsonElement): JsonElement = when (e) {
+        is JsonObject -> JsonObject(e.mapValues { redact(it.value) })
+        is JsonArray -> JsonArray(e.map(::redact))
+        is JsonPrimitive -> if (e.isString) JsonPrimitive(Redact.text(e.content)) else e
     }
 }
 

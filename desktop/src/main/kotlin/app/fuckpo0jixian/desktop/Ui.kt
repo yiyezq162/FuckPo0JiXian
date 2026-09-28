@@ -140,9 +140,10 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             // Identity block: which app, which device.
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (mac) 6.dp else 8.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.size(if (mac) 28.dp else 36.dp).clip(RoundedCornerShape(if (mac) 7.dp else 18.dp)).background(colors.accent), contentAlignment = Alignment.Center) {
-                    Icon(Glyph.Shield, null, tint = Color.White, modifier = Modifier.size(if (mac) 17.dp else 20.dp))
-                }
+                // The app icon itself (the chick), as in the Dock and taskbar; the PNG has its own margin.
+                val appIcon = remember { androidx.compose.ui.graphics.painter.BitmapPainter(
+                    androidx.compose.ui.res.useResource("icon.png") { androidx.compose.ui.res.loadImageBitmap(it) }) }
+                Image(appIcon, null, Modifier.size(if (mac) 34.dp else 40.dp))
                 Column {
                     Text("去他妈的鸡险", style = Type.headline, color = colors.label, maxLines = 1)
                     Text("本机 · ${s.deviceName.ifBlank { "未命名" }}", style = Type.caption, color = colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -219,7 +220,11 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
         val d = s.domesticExit
         Fact("当前出口", exit ?: "未检查", if (d != null && s.snapshot != null) (if (d.cidr == s.snapshot!!.current) "直连出口一致" else "直连出口 ${d.cidr.value}") else "Po0 识别",
             Glyph.Globe, Modifier.weight(1f), mono = exit != null)
-        Fact("网络", matchedName(s, link) ?: link?.label ?: "未连接", matchedName(s, link)?.let { link?.label } ?: if (link?.online == true) "未绑定到固定槽" else "",
+        Fact("网络", matchedName(s, link) ?: link?.label ?: "未连接", matchedName(s, link)?.let { link?.label } ?: when {
+                link?.gatewayIp != null && link?.gatewayMac == null -> "无法识别路由器，见白名单里的槽位"
+                link?.online == true -> "未绑定到固定槽"
+                else -> ""
+            },
             Glyph.Router, Modifier.weight(1f))
         s.snapshot?.let { snap ->
             Card(Modifier.weight(1f).fillMaxHeight(), padding = PaddingValues(14.dp)) {

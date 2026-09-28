@@ -242,6 +242,10 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
                         if (here) Tag("就是这里", colors.green, Glyph.Check)
                         else Button(if (identity == null) "绑定" else "改绑到这里", { bind = true }, enabled = !busy && link?.gatewayMac != null)
                     }
+                    if (link?.gatewayIp != null && link?.gatewayMac == null) {
+                        Divider(48.dp)
+                        RouterUnreadable()
+                    }
                     if (identity != null) { Divider(48.dp); SettingRow("撤销绑定", icon = Glyph.Power, iconTint = colors.red, titleColor = colors.red, enabled = !busy, onClick = { c.revokeNetwork(original.number) }) }
                 }
                 if (bindable) Group(footer = if (s.paused) "需先恢复检查。" else "现场核对出口后更新一次，不保存绑定。") {
@@ -255,4 +259,17 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
     if (bind) Alert("绑定当前网络？", { bind = false }, message = "${link?.label ?: "未知网络"}\n出口变化时自动更新槽 ${original.number + 1}。能防误连，防不了刻意仿冒的路由器。",
         actions = listOf(DialogAction("授权并绑定", preferred = true, enabled = !busy) { c.bindNetwork(original.number, name); bind = false },
             DialogAction("取消") { bind = false }))
+}
+
+/**
+ * The router answered no MAC. On macOS that usually means the app may not use the local network yet: the system
+ * hides other devices' hardware addresses until it may. Offers the switch in System Settings.
+ */
+@Composable internal fun RouterUnreadable() {
+    if (os == Os.MAC) SettingRow("无法识别路由器", subtitle = "请在「隐私与安全性 → 本地网络」中允许去他妈的鸡险，然后回到这里绑定",
+        icon = Glyph.Warning, iconTint = colors.orange) {
+        Button("打开设置", {
+            runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")) }
+        })
+    } else SettingRow("无法识别路由器", subtitle = "路由器没有回应 ARP，暂时无法绑定", icon = Glyph.Warning, iconTint = colors.orange)
 }

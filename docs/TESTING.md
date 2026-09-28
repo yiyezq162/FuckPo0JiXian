@@ -1,3 +1,9 @@
+# 0.8.7-preview 手机 STUN 与真机日志修复验证（2026-09-29）
+
+- 依据三端 0.8.6 真机调试信息：手机模块已连接，路由器经 NAT-PMP 返回运营商内网地址；Mac 打包后的 App 读不到路由器 MAC（终端和脚本 App 里都能读到），家里槽因此一直「无目标」；Windows 首个直连 TLS 读超时后改走 tunnel。
+- core 120 项、desktop 36 项通过；Android Debug / Preview / Lint 通过；`emulator-5580` 常规套件 26 项通过；桌面截图确认侧栏换成小鸡图标。
+- 未验证：手机 STUN（本机 Clash TUN 连模拟器的 53 端口也劫持，只能看到 fake-IP，走到了 HTTPS 回退）；Mac「本地网络」权限提示与授权后能否读到 MAC；Windows 标题栏隐藏图标与标题（需 Windows 实机）。
+
 # 0.8.6-preview 模块联动与导出拆分验证（2026-09-29）
 
 - 核心 / 桌面：core 120 项、desktop 36 项通过（2 项平台专用跳过）。新增 `Redact`、`ShareExport`、`DebugExport`、`StateDiff` 与按版本查找模块的测试；0.8.5 及更早的脱敏导出仍可导入。

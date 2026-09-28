@@ -50,10 +50,16 @@ class Controller(private val context: Context) {
     @Volatile private var requestJob: Job? = null
     private var networkId: String? = null
     private var lastNetLine: String? = null
+    private var knownIdentity: WifiObservation? = null
     private val stability = Debouncer(policy.debounceMs)
     private var demo = SlotDemoPlatform()
     private var demoScenario = 0
     private var previewSlot: Int? = null
+    /**
+     * Networks where STUN got no answer (UDP blocked) or disagreed with what Po0 sees (a carrier NAT mapping UDP
+     * elsewhere): the exit is asked over HTTPS there, without waiting for STUN again.
+     */
+    private val httpsOnly = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     /** The best non-VPN network, reported on Android 12+ whatever VPN is the default. */
     @Volatile private var underlying: Network? = null
     /**
@@ -148,7 +154,10 @@ class Controller(private val context: Context) {
         val n = physical(); networkLabel.value = kind(current() ?: cm.activeNetwork)
         currentNetworkKey.value = networkKey(current() ?: cm.activeNetwork)
         wifiObservation.value = if (store.load().demo) demoWifi() else wifiObserver.latest
-        val identity = wifiObserver.latest
+        // Android briefly withholds the Wi-Fi name (e.g. when the observer re-registers on opening the app). That is
+        // not a new network: keep the last identity seen on this network so the gap does not trigger a check.
+        wifiObserver.latest?.takeIf { it.available && it.ssid != null && it.networkKey == networkKey(n) }?.let { knownIdentity = it }
+        val identity = knownIdentity?.takeIf { n != null && it.networkKey == networkKey(n) }
         val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localAddresses(n)}")
         if (!stability.changed(id, SystemClock.elapsedRealtime())) return@launch
         // Credential- and identity-free timing evidence: network type and the same clock as FuckPo0JiXianCheck.
@@ -268,10 +277,8 @@ class Controller(private val context: Context) {
         val state = store.load().copy(nextProbeAllowed = now + policy.probeIntervalMs, probeStatus = "PROBE_RUNNING")
         withContext(Dispatchers.IO) { store.save(state) }
         return try {
-            val source = ProbeSource.IP3322
-            val response = withContext(Dispatchers.IO) { NetworkTransport(network).execute("GET", source.url) }
+            val observed = observeExit(network, now)
             if (physical() != network) throw ApiFailure("NETWORK_CHANGED")
-            val observed = DomesticProbe.parse(response, now, networkKey(network)!!, source)
             withContext(Dispatchers.IO) { store.save(state.copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
             true
         } catch (e: CancellationException) {
@@ -285,6 +292,19 @@ class Controller(private val context: Context) {
             }
             false
         }
+    }
+    /**
+     * The exit of [network]: STUN first (one UDP exchange, bound to the physical network), else ip.3322.net over
+     * HTTPS on the same network. Both leave outside any VPN; Po0 must still see the same /24 before anything is written.
+     */
+    private suspend fun observeExit(network: Network, now: Long = System.currentTimeMillis()): DomesticExit = withContext(Dispatchers.IO) {
+        val key = networkKey(network)!!
+        if (key !in httpsOnly) {
+            Stun.query(network)?.let { return@withContext DomesticExit(it, now, key, ProbeSource.STUN) }
+            httpsOnly.add(key); LifeLog.add("PROBE stun unanswered; https on this network")
+        }
+        val source = ProbeSource.IP3322
+        DomesticProbe.parse(NetworkTransport(network).execute("GET", source.url), now, key, source)
     }
     suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, enhanced: Boolean = false,
                          fallback: Boolean = false): String = withContext(Dispatchers.Main.immediate) {
@@ -353,14 +373,21 @@ class Controller(private val context: Context) {
                 session = session.copy(observedCidr = candidate, revalidate = {
                     val latest = if (startKind == NetworkKind.WIFI) wifiObserver.observe(n!!) else null
                     val identityOk = startKind != NetworkKind.WIFI || (wifi == null && latest == null) || wifi?.sameIdentity(latest) == true
-                    val reply = NetworkTransport(n!!).execute("GET", ProbeSource.IP3322.url)
-                    val exit = DomesticProbe.parse(reply, System.currentTimeMillis(), networkKey(n)!!, ProbeSource.IP3322)
+                    val exit = observeExit(n!!)
                     identityOk && physical() == n && exit.cidr == candidate
                 })
             }
             val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
             if (!observeOnly) manualPreview.value = null
             val after = store.load()
+            // Po0 sees another /24 than STUN just reported on this network: ask over HTTPS here from now on.
+            val exit = after.domesticExit
+            val seen = after.snapshot?.current
+            if (!s.demo && exit?.source == ProbeSource.STUN && exit.networkKey == session.key && after.networkKey == session.key &&
+                seen != null && exit.cidr != seen && httpsOnly.add(session.key)) {
+                LifeLog.add("PROBE stun ${exit.ipv4} disagrees with Po0 ${seen.value}; https on this network")
+                scheduleCheck("catch-up")
+            }
             feedback.value = statusText(code)
             previewSlot?.let { number ->
                 manualPreview.value = CheckFlow.permit(code, after, number, session.key, session.wifi, session.observedCidr,
@@ -438,7 +465,7 @@ class Controller(private val context: Context) {
             "runtimeStatus" to runtime.status.value, "runtimeConnection" to runtime.lastConnection.value, "runtimeResult" to runtime.result.value,
             "moduleVersion" to module?.let { "${it.versionName} (${it.version})" }, "moduleNetwork" to module?.network,
             "moduleGateway" to module?.gateway, "routerWan" to module?.wan,
-            "update" to updater.state.value.javaClass.simpleName, "lastExit" to LifeLog.lastExit()?.let { "${java.time.Instant.ofEpochMilli(it.first)} ${it.second}" })
+            "update" to updater.state.value.label, "lastExit" to LifeLog.lastExit()?.let { "${java.time.Instant.ofEpochMilli(it.first)} ${it.second}" })
         return DebugExport.build(s, device, System.currentTimeMillis(), logs = mapOf("lifecycle" to LifeLog.recent()), details = details)
     }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }

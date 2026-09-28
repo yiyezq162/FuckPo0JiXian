@@ -280,10 +280,11 @@ private fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>, 
         }
     }
     item(key = "rec-exit") {
-        Section(header = "出口", footer = "国内出口经 ip.3322.net 查询，与 Po0 识别一致才会写入。") {
+        Section(header = "出口", footer = "国内出口经国内 STUN 服务器查询（走 Wi-Fi / 移动数据本身，不经过 VPN），不通时改用 ip.3322.net；与 Po0 识别一致才会写入。") {
             val d = s.domesticExit
             val current = s.snapshot?.current
-            ListRow("国内出口", subtitle = d?.let { "${time(it.time)} 查询" } ?: statusText(s.probeStatus), value = d?.ipv4 ?: "未查询")
+            ListRow("国内出口", subtitle = d?.let { "${if (it.source == ProbeSource.STUN) "STUN" else "ip.3322.net"} · ${time(it.time)}" }
+                ?: statusText(s.probeStatus), value = d?.ipv4 ?: "未查询")
             ListRow("Po0 识别", value = current?.value ?: "未检查", trailing = if (d != null && current != null) {
                 { Capsule(if (d.cidr == current) "一致" else "不一致", if (d.cidr == current) Apple.colors.green else Apple.colors.orange) }
             } else null)

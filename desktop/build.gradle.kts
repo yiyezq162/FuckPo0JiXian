@@ -42,6 +42,13 @@ compose.desktop.application {
             bundleID = "app.fuckpo0jixian.desktop"
             dockName = "去他妈的鸡险"
             iconFile.set(project.file("icons/icon.icns"))
+            // Shown in the system's local network prompt: the router's MAC identifies home and office.
+            infoPlist {
+                extraKeysRawXml = """
+                    <key>NSLocalNetworkUsageDescription</key>
+                    <string>读取路由器的硬件地址，用来识别家里和公司的网络。</string>
+                """.trimIndent()
+            }
         }
         windows {
             iconFile.set(project.file("icons/icon.ico"))
