@@ -8,12 +8,13 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
         var s = LayoutRules.migrate(store.load())
         val t = now()
         val permit = network.manualPermit
-        if (s.globalBlock != null) return s.globalBlock!!
+        val reviewing = manual && observeOnly && s.globalBlock in setOf("SLOT_VERIFY_FAILED", "SLOT_INVALID", "INVALID_RESPONSE", "NETWORK_OR_STORAGE_ERROR")
+        if (s.globalBlock != null && !reviewing) return s.globalBlock!!
         if (s.paused && !observeOnly) return "PAUSED"
         if (s.authBlocked) return "AUTH_PAUSED"
         // A person pressing "check" is never made to wait for the loop guard or local backoff,
         // but a server-mandated Retry-After (429) always holds.
-        if (t < s.nextAllowed && !(manual && s.status != "HTTP_429")) return "RATE_LIMITED"
+        if (!s.requestAllowed(t, manual)) return "RATE_LIMITED"
         val initialAccount = s.accountContext
         val initialVersion = s.layout?.version
         val initialMode = s.mode
@@ -37,11 +38,16 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
         var postAttempted = false
         try {
             // Migration and limiter are durable before all network work.
-            persist(s.copy(lastCheck = t, nextAllowed = t + policy.minIntervalMs, networkKey = network.key))
+            persist(s.copy(lastCheck = t, nextAllowed = maxOf(s.serverDeadline(), t + policy.minIntervalMs), networkKey = network.key))
             live()
             val before = platform.query(); live()
             val layout = s.layout ?: SlotLayout()
             LayoutRules.validate(before, layout)
+            if (reviewing) {
+                // Do not clear the block or journal before both fresh reads and all protection checks pass.
+                val second = platform.query(); live(); LayoutRules.validate(second, layout)
+                if (before != second) throw ApiFailure("SLOT_VERIFY_FAILED")
+            }
             s = s.copy(snapshot = before, observations = (s.observations + Observation(t, before.current, network.kind))
                 .filter { it.time >= t - policy.retentionMs }.takeLast(500))
             // Recovery never repeats a POST, even when the current exit changed since intent.
@@ -49,7 +55,8 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                 if (p.account != s.accountContext) throw ApiFailure("ACCOUNT_MISMATCH")
                 val unchangedOthers = before.capacity == p.before.capacity &&
                     before.entries.filterNot { it.slot == p.slot }.toSet() == p.before.entries.filterNot { it.slot == p.slot }.toSet()
-                if (!unchangedOthers) throw ApiFailure("SLOT_VERIFY_FAILED")
+                if (!unchangedOthers && !(reviewing && reviewablePeers(p.before, before, p.slot, layout)))
+                    throw ApiFailure("SLOT_VERIFY_FAILED")
                 val occupant = before.entries.find { it.slot == p.slot }?.cidr
                 val versionMatches = p.version == layout.version
                 val code = when {
@@ -58,12 +65,27 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                     occupant == p.original -> "RECOVERED_NOT_APPLIED"
                     else -> "SLOT_CONFLICT"
                 }
-                s = s.copy(layout = layout.copy(pending = null, slots = layout.slots.map {
-                    if (it.number != p.slot) it else it.copy(
+                s = s.copy(paused = s.paused || reviewing, globalBlock = if (reviewing) null else s.globalBlock,
+                    layout = layout.copy(pending = null, slots = layout.slots.map {
+                    if (it.number != p.slot) {
+                        val occupantNow = before.entries.find { entry -> entry.slot == it.number }?.cidr
+                        val occupantThen = p.before.entries.find { entry -> entry.slot == it.number }?.cidr
+                        if (reviewing && occupantNow != occupantThen) it.copy(status = "PEER_UPDATED", changedAt = t,
+                            baseline = if (it.writer == Writer.LOCAL && it.shared && it.authorized) occupantNow else it.baseline)
+                        else it
+                    } else it.copy(
                         baseline = if (versionMatches && occupant == p.candidate) occupant else it.baseline,
                         authorized = versionMatches && code != "SLOT_CONFLICT" && it.authorized, status = code)
                 }))
                 return finish(code)
+            }
+            if (reviewing) {
+                // Without a journal we cannot attribute changes. Require the previous protected snapshot intact.
+                val previous = store.load().snapshot
+                if (previous == null || previous.capacity != before.capacity || previous.entries.toSet() != before.entries.toSet())
+                    throw ApiFailure("SLOT_VERIFY_FAILED")
+                s = s.copy(paused = true, globalBlock = null)
+                return finish("PROTECTION_REVIEWED")
             }
             // v1 carried a narrower mobile authorization. Reconcile, never infer identity or unknown-WiFi rights.
             // What this device saw at its previous check; a difference means someone else wrote the slot.
@@ -152,9 +174,25 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                 (60_000L * (1L shl (count - 1).coerceIn(0, 6))).coerceAtMost(policy.maxBackoffMs))
             runCatching { store.save(durable.copy(status = if (postAttempted && !global) "PENDING_REVIEW" else code,
                 failures = count, nextAllowed = if (Long.MAX_VALUE - t < wait) Long.MAX_VALUE else t + wait,
+                serverNotBefore = maxOf(durable.serverDeadline(), if (failure?.http == 429 || code == "HTTP_429")
+                    if (Long.MAX_VALUE - t < wait) Long.MAX_VALUE else t + wait else 0),
                 authBlocked = failure?.http in listOf(401, 403), globalBlock = if (global) code else durable.globalBlock)) }
             if (e is CancellationException) throw e
             return if (postAttempted && !global) "PENDING_REVIEW" else code
+        }
+    }
+
+    /** Only explicitly designated peer/co-managed slots may change during explicit read-only review.
+     * Unknown records (including unnumbered), missing records and capacity changes remain protected. */
+    private fun reviewablePeers(old: Snapshot, current: Snapshot, target: Int, layout: SlotLayout): Boolean {
+        if (old.capacity != current.capacity) return false
+        val a = old.entries.filterNot { it.slot == target }.toSet()
+        val b = current.entries.filterNot { it.slot == target }.toSet()
+        return ((a - b) + (b - a)).all { entry ->
+            val number = entry.slot ?: return@all false
+            val slot = layout.slots.find { it.number == number } ?: return@all false
+            (slot.writer == Writer.OTHER_DEVICE || (slot.writer == Writer.LOCAL && slot.shared && slot.purpose == SlotPurpose.FIXED)) &&
+                a.any { it.slot == number } && b.any { it.slot == number }
         }
     }
 }

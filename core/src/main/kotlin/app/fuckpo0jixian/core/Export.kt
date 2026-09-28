@@ -4,12 +4,12 @@ import kotlinx.serialization.json.*
 import java.time.Instant
 
 /**
- * Review export shared between devices and with helpers. Contains no token, account context, network keys,
- * Wi-Fi names or access points, and every address keeps only its first two octets.
+ * Review export omits structured credential/account/network identity fields and masks address fields.
+ * User-authored names/notes/owners and diagnostic text are retained, not content-scrubbed.
  */
 object RedactedExport {
     const val FORMAT = "fuckpo0jixian-export"
-    const val NOTE = "已脱敏：不含 Token、账户标识、Wi-Fi 名称与接入点；IP 只保留前两段（/16）。"
+    const val NOTE = "结构化凭据、账户标识及 Wi-Fi/路由器身份字段已移除，IP 字段只保留前两段（/16）。仍保留设备名、槽位备注和管理者等自由文本；其中手填的姓名、IP 或秘密不会自动清除。分享前请自行检查。"
     private val pretty = Json { prettyPrint = true }
     private fun time(value: Long) = if (value <= 0) JsonNull else JsonPrimitive(Instant.ofEpochMilli(value).toString())
 

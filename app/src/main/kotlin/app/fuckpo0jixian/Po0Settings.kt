@@ -172,10 +172,10 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
         runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
             .onFailure { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
-    Section(header = "后台运行", inset = 58.dp, footer = "「常驻运行」最可靠：应用保持在线，网络一变几秒内检查，不耗额外电量，通知栏会有一条静默通知。" +
+    Section(header = "后台运行", inset = 58.dp, footer = "「常驻运行」通过前台服务提高后台存活概率，通知栏会有一条静默通知；不保证所有 OEM、Doze 或进程回收场景都能常驻、及时检查或自动重启，也不保证零额外耗电。" +
         "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」。已 root 的设备可改用「模块增强」。") {
         ToggleRow("常驻运行", resident, { resident = it; c.keepAlive(it); if (it && !exempt) requestExemption() },
-            subtitle = "保持后台在线，被清理后自动恢复", leading = { IconTile(Glyphs.Shield, colors.green) })
+            subtitle = "提高后台存活概率，不保证常驻", leading = { IconTile(Glyphs.Shield, colors.green) })
         ToggleRow("不显示后台任务", hidden, { hidden = it; Recents.set(context, it) },
             subtitle = "在最近任务中隐藏本应用", leading = { IconTile(Icons.Rounded.Lock, colors.gray) })
         ListRow("电池优化", value = if (exempt) "不受限制" else "受限制", leading = { IconTile(Glyphs.Bolt, colors.orange) })

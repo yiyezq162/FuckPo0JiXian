@@ -15,6 +15,7 @@ object StateCodec {
     fun encode(s: State): String = buildJsonObject {
         put("version", 2); put("mode", s.mode.name); put("paused", s.paused); put("demo", s.demo)
         put("accountContext", s.accountContext); put("globalBlock", s.globalBlock)
+        put("serverNotBefore", s.serverNotBefore)
         put("layout", s.layout?.let(LayoutCodec::encode) ?: JsonNull)
         put("runtimeMode", s.runtimeMode.name); put("deviceName", s.deviceName); put("fallbackMinutes", s.fallbackMinutes)
         put("fixed", s.budget.fixed); put("mobile", s.budget.mobile)
@@ -66,7 +67,9 @@ object StateCodec {
             o.optional("accountContext") ?: java.util.UUID.randomUUID().toString(), o.optional("globalBlock"),
             o.optional("deviceName") ?: "",
             // Absent before 0.8: the default cadence.
-            FallbackInterval.clamp(o.optional("fallbackMinutes")?.toIntOrNull() ?: FallbackInterval.DEFAULT))
+            FallbackInterval.clamp(o.optional("fallbackMinutes")?.toIntOrNull() ?: FallbackInterval.DEFAULT),
+            // Old pending failures may have hidden HTTP_429; conservatively preserve their existing deadline.
+            o.optional("serverNotBefore")?.toLong() ?: if (o.s("status") in setOf("HTTP_429", "PENDING_REVIEW")) o.l("nextAllowed") else 0)
         return if (o.l("version") == 1L) LayoutRules.migrate(state) else state
     }
 }

@@ -168,6 +168,77 @@ class LayoutSyncTest {
         val f2 = fake(); f2.onQuery = { if (it == 2) f2.snap = f2.snap.copy(current = mobile) }
         assertEquals("CONCURRENT_CHANGE", check(MemoryStore(state()), f2)); assertTrue(f2.writes.isEmpty())
     }
+    @Test fun peerChangeAfterPostCanBeReviewedWithoutReplayButNeverIgnored() = runTest {
+        val st = MemoryStore(state()); val f = fake(full = true)
+        f.afterWrite = { f.snap = f.snap.copy(entries = f.snap.entries.map {
+            if (it.slot == 3) it.copy(cidr = Cidr("198.18.30.0/24")) else it }) }
+        assertEquals("SLOT_VERIFY_FAILED", check(st, f))
+        val pending = st.state.layout!!.pending
+        assertNotNull(pending)
+        val restart = MemoryStore(StateCodec.decode(StateCodec.encode(st.state)))
+        clock += 120_000
+        assertEquals("SLOT_VERIFY_FAILED", check(restart, f))
+        val count = f.queries
+        assertEquals("RECOVERED_VERIFIED", Engine(restart, { clock }).check(f, session(f), manual = true, observeOnly = true))
+        assertEquals(count + 2, f.queries)
+        assertNull(restart.state.globalBlock); assertNull(restart.state.layout!!.pending)
+        assertTrue(restart.state.paused)
+        assertEquals("PEER_UPDATED", restart.state.layout!!.slots.first { it.number == 3 }.status)
+        assertEquals(1, f.writes.size)
+        assertEquals("PAUSED", check(restart, f))
+    }
+    @Test fun reviewRetainsJournalForLossUnknownChangesAccountAndInvalidStructure() = runTest {
+        repeat(6) { fault ->
+            val st = MemoryStore(state()); val f = fake(full = true)
+            val old = f.snap
+            val pending = SlotPending(if (fault == 3) "wrong-account" else st.state.accountContext,
+                1, 0, "FIXED", home, newHome, "home", old, clock)
+            st.save(st.state.copy(globalBlock = "SLOT_VERIFY_FAILED", layout = layout().copy(pending = pending)))
+            f.snap = when (fault) {
+                0 -> old.copy(entries = old.entries.filterNot { it.slot == 3 })
+                1 -> old.copy(entries = old.entries.map { if (it.slot == null) it.copy(cidr = Cidr("198.18.50.0/24")) else it })
+                2 -> old.copy(entries = old.entries.map { if (it.slot == 1) it.copy(cidr = Cidr("198.18.50.0/24")) else it })
+                4 -> old.copy(entries = old.entries.map { if (it.slot == 1) it.copy(slot = 0) else it })
+                else -> old
+            }
+            if (fault == 5) f.onQuery = { if (it == 2) f.snap = old.copy(current = mobile) }
+            Engine(st, { clock }).check(f, session(f), manual = true, observeOnly = true)
+            assertNotNull(st.state.globalBlock, "fault $fault")
+            assertEquals(pending, st.state.layout!!.pending, "fault $fault")
+            assertTrue(f.writes.isEmpty())
+        }
+    }
+    @Test fun failedReviewCommitKeepsDurablePendingAndBlock() = runTest {
+        val f = fake(); val st = MemoryStore(state())
+        val pending = SlotPending(st.state.accountContext, 1, 0, "FIXED", home, newHome, "home", f.snap, clock)
+        st.save(st.state.copy(globalBlock = "NETWORK_OR_STORAGE_ERROR", layout = layout().copy(pending = pending)))
+        val store = object : StateStore {
+            override fun load() = st.load()
+            override fun save(state: State) {
+                if (state.globalBlock == null) error("commit failed")
+                st.save(state)
+            }
+        }
+        Engine(store, { clock }).check(f, session(f), manual = true, observeOnly = true)
+        assertEquals(pending, st.state.layout!!.pending); assertNotNull(st.state.globalBlock)
+        assertTrue(f.writes.isEmpty())
+    }
+    @Test fun review429CannotLoseServerDeadlineOnStatusChangeOrRestart() = runTest {
+        val f = fake(); val st = MemoryStore(state())
+        val pending = SlotPending(st.state.accountContext, 1, 0, "FIXED", home, newHome, "home", f.snap, clock)
+        st.save(st.state.copy(globalBlock = "SLOT_VERIFY_FAILED", layout = layout().copy(pending = pending)))
+        f.onQuery = { throw ApiFailure("HTTP_429", 429, 7_200_000) }
+        assertEquals("HTTP_429", Engine(st, { clock }).check(f, session(f), manual = true, observeOnly = true))
+        val deadline = st.state.serverNotBefore
+        val restarted = MemoryStore(StateCodec.decode(StateCodec.encode(st.state)).copy(status = "NOT_CHECKED", nextAllowed = 0))
+        clock += 3_600_001
+        assertEquals("RATE_LIMITED", Engine(restarted, { clock }).check(f, session(f), manual = true, observeOnly = true))
+        assertEquals(1, f.queries); assertEquals(pending, restarted.state.layout!!.pending)
+        f.onQuery = null; clock = deadline
+        assertEquals("RECOVERED_NOT_APPLIED", Engine(restarted, { clock }).check(f, session(f), manual = true, observeOnly = true))
+        assertEquals(deadline, restarted.state.serverNotBefore)
+        assertTrue(restarted.state.paused); assertTrue(f.writes.isEmpty())
+    }
     @Test fun v1NonDefaultSlotsUninitializedAndPendingMigrateWithoutWrites() = runTest {
         val old = State(mode = Mode.OBSERVE, paused = true, slotPlan = SlotPlan(home, 3, 4, false, mobile, newHome))
         val v1 = StateCodec.encode(old).replace("\"version\":2", "\"version\":1")

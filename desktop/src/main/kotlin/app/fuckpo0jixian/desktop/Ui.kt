@@ -210,6 +210,9 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
         SettingRow("连接 Po0", icon = Glyph.Key, onClick = { go(Page.SETTINGS) })
     }
     Notices(s)
+    if (s.globalBlock != null) Group(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
+        SettingRow("只读复核保护状态", icon = Glyph.Sync, enabled = !busy && credential, onClick = c::reviewProtection)
+    }
     // Three facts at a glance.
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         val exit = s.snapshot?.current?.value

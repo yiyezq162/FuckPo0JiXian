@@ -6,7 +6,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.UUID
 
 /**
  * Desktop counterpart of the Android controller. The desktop stays on while it runs, so instead of system wake-ups
@@ -114,6 +113,10 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         }
     }
     fun checkConnection() = launchCheck(manual = true, observeOnly = true)
+    fun reviewProtection() {
+        manualPreview.value = null
+        launchCheck(manual = true, observeOnly = true)
+    }
 
     private suspend fun updateDomestic(l: DesktopLink): Boolean {
         val t = now()
@@ -161,7 +164,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             }
             val platform = Po0Platform(vault::read, transport)
             if ((!observeOnly || previewSlot != null) && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null &&
-                !s.paused && !s.authBlocked && (now() >= s.nextAllowed || (manual && s.status != "HTTP_429"))) {
+                !s.paused && !s.authBlocked && s.globalBlock == null && s.requestAllowed(now(), manual)) {
                 val d = store.load().domesticExit
                 val fresh = d != null && d.networkKey == l.key && now() - d.time < policy.freshnessMs
                 if (!fresh && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
@@ -211,7 +214,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     private fun scheduleFollowUp() {
         followUp?.cancel()
         followUp = scope.launch {
-            delay(maxOf(policy.debounceMs, store.load().nextAllowed - now()))
+            delay(maxOf(policy.debounceMs, maxOf(store.load().nextAllowed, store.load().serverDeadline()) - now()))
             if (scheduleEnabled()) launchCheck(manual = false)
         }
     }
@@ -251,17 +254,16 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     }
     fun exportText(): String = RedactedExport.build(store.load(), if (os == Os.WINDOWS) "windows" else "macos", version, now(), BoundTransport.trace())
     fun saveToken(value: String) = edit {
-        val sameAccount = runCatching { vault.read() }.getOrNull() == value.trim()
-        vault.save(value.trim())
+        val next = AccountCredentials.save(store, value, vault::read, vault::save)
         credentialPresent.value = true
-        it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = if (sameAccount) it.snapshot else null,
-            layout = if (sameAccount) it.layout else null, accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
-            globalBlock = if (sameAccount) it.globalBlock else null, status = "TOKEN_SAVED")
+        next
     }
     fun clearToken() = edit {
-        vault.clear(); credentialPresent.value = false
-        State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName,
+        val empty = State(paused = true, nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName,
             fallbackMinutes = it.fallbackMinutes)
+        store.save(empty)
+        vault.clear(); credentialPresent.value = false
+        empty
     }
     fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
     fun previewManual(number: Int) {

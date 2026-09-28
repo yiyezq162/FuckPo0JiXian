@@ -18,7 +18,7 @@ KernelSU Action可通过官方module config --temp更新override.description，�
 
 每个helper代次必须先完成APK内只读请求才允许后续使用原自动同步开关。仅握手、排队、缓存或限频不算完成。模块禁用/remove被每次事件和票据核验检查；FileObserver/60秒生命周期检查退出helper。首次解锁前不接触凭据；强停标记阻止自动拉起，只有用户主动打开应用才恢复。
 
-安装前先核对dist/SHA256SUMS-runtime08和APK签名。当前只支持主用户0；APK versionCode 须与模块 module.prop 的 versionCode 一致（本版 17），更新APK需同时更新模块。协议仍为1；固定网络身份与稳定槽位全部由APK维护，模块不接收SSID/BSSID或授权。不支持工作资料或多用户。不得把“撤销APK su权限”误当作模块禁用：此APK不申请su，必须在管理器禁用/卸载模块。管理器直接剥夺模块root能力仍未真机验证。
+安装前先核对dist/SHA256SUMS-runtime08和APK签名。当前只支持主用户0；APK versionCode 须与模块 module.prop 的 versionCode 一致（本版 18），更新APK需同时更新模块。协议仍为1；固定网络身份与稳定槽位全部由APK维护，模块不接收SSID/BSSID或授权。不支持工作资料或多用户。不得把“撤销APK su权限”误当作模块禁用：此APK不申请su，必须在管理器禁用/卸载模块。管理器直接剥夺模块root能力仍未真机验证。
 
 回退：先在APK选标准模式（保留所有配置与限频）；必要时在「概览」页暂停。再在管理器禁用/卸载fuckpo0jixian_helper；观察短时服务退出（90秒协程超时，深Doze单独降级退出，不保证深睡墙钟上限），待授权重启确认卸载结果。无需清数据/卸载APK，不删除Po0条目，不修改家宽更新器。不要为回退卸载APK或强行降版本；旧包可保留作参考，旧版不理解新字段。
 

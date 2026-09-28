@@ -3,7 +3,7 @@ package app.fuckpo0jixian.core
 object SyncPlanning {
     fun delayMs(state: State, now: Long, stableRemaining: Long): Long? {
         if (state.paused || state.demo || state.authBlocked || state.globalBlock != null || stableRemaining == Long.MAX_VALUE) return null
-        return maxOf(stableRemaining, (state.nextAllowed - now).coerceAtLeast(0))
+        return maxOf(stableRemaining, (maxOf(state.nextAllowed, state.serverDeadline()) - now).coerceAtLeast(0))
     }
     fun needsFollowUp(code: String, state: State): Boolean = !state.paused && !state.authBlocked && state.globalBlock == null &&
         (code in setOf("RATE_LIMITED", "BUSY") || (state.failures > 0 && code == state.status && code !in setOf("NO_TOKEN", "NETWORK_CHANGED", "CANCELLED_NETWORK_OR_SETTINGS")))

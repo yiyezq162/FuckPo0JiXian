@@ -225,6 +225,7 @@ class Controller(private val context: Context) {
     }
     fun check() { if (operation?.isActive == true) return; operation = scope.launch { runCheck(true) } }
     fun checkConnection() { if (operation?.isActive == true) return; operation = scope.launch { runCheck(true, observeOnly = true) } }
+    fun reviewProtection() { manualPreview.value = null; checkConnection() }
     fun checkDomestic() {
         if (operation?.isActive == true) return
         operation = scope.launch {
@@ -336,7 +337,7 @@ class Controller(private val context: Context) {
             // Slot writes require a recent observation on this exact Android network.
             // Never turn the domestic result into the API source IP; compare both in SlotSync.
             if ((!observeOnly || previewSlot != null) && !s.demo && (s.mode == Mode.AUTO || permit != null || previewSlot != null) && s.layout != null && !s.paused && !s.authBlocked &&
-                (System.currentTimeMillis() >= s.nextAllowed || (manual && s.status != "HTTP_429")) && session.stillCurrent()) {
+                s.globalBlock == null && s.requestAllowed(System.currentTimeMillis(), manual) && session.stillCurrent()) {
                 val d = store.load().domesticExit
                 val freshProbe = d != null && d.networkKey == session.key && System.currentTimeMillis() - d.time < policy.freshnessMs
                 if (!freshProbe && LocalCheck.probeAllowed(store.load(), session.key, System.currentTimeMillis())) updateDomestic(n!!)
@@ -473,22 +474,16 @@ class Controller(private val context: Context) {
         // Keep real and simulated credentials separate; discard network/account associations on switching.
         demo = SlotDemoPlatform()
         val base = State(demo = enabled, paused = true, status = if (enabled) "DEMO_READY" else "NOT_CHECKED",
-            nextAllowed = it.nextAllowed, authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
+            nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), authBlocked = it.authBlocked, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
             fallbackMinutes = it.fallbackMinutes)
         if (enabled) demoState(base) else base
     }
     fun saveToken(value: String) = edit {
-        val sameAccount = vault.read() == value.trim()
-        if (!sameAccount) store.save(State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, deviceName = it.deviceName,
-            fallbackMinutes = it.fallbackMinutes))
-        vault.save(value.trim())
+        val next = AccountCredentials.save(store, value, vault::read, vault::save)
         credentialPresent.value = true
-        it.copy(paused = true, authBlocked = false, lastSuccess = 0, snapshot = null, ownership = emptyList(), profiles = emptyList(), activeProfileId = null,
-            slotPlan = if (sameAccount) it.slotPlan else null, layout = if (sameAccount) it.layout else null,
-            accountContext = if (sameAccount) it.accountContext else UUID.randomUUID().toString(),
-            globalBlock = if (sameAccount) it.globalBlock else null, budget = Budget(), status = "TOKEN_SAVED")
+        next
     }
-    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
+    fun clearToken() = edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty }
     fun clearHistory() = edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") }
     private fun demoWifi(): WifiObservation? = when (demoScenario) {
         0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())

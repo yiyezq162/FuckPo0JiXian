@@ -236,6 +236,11 @@ private fun LazyListScope.homeItems(s: State, busy: Boolean, network: String, cu
             PrimaryButton(if (s.paused) "恢复检查" else "暂停检查", { c.pause(!s.paused) }, Modifier.width(128.dp), tinted = true)
         }
     }
+    if (s.globalBlock != null) item(key = "protection-review") {
+        Section(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
+            ActionRow("只读复核保护状态", enabled = !busy, onClick = c::reviewProtection)
+        }
+    }
     item(key = "home-capacity") {
         val snap = s.snapshot
         Section(header = "名额", footer = if (snap == null) "连接 Po0 并检查后显示。" else null) {

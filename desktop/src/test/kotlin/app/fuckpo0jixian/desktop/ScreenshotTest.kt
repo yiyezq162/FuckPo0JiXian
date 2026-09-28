@@ -15,6 +15,25 @@ import kotlin.test.Test
  * both themes. Opt-in: FUCKPO0JIXIAN_SCREENSHOTS=1.
  */
 class ScreenshotTest {
+    @Test fun renderProtectionRecovery() {
+        if (System.getenv("FUCKPO0JIXIAN_SCREENSHOTS") != "1") return
+        val dir = Files.createTempDirectory("fpjx-recovery-render")
+        val c = DesktopController(FileStore(dir), FileVault(dir.resolve("t")))
+        c.credentialPresent.value = true // synthetic UI only; no credential or monitor
+        c.store.save(State(globalBlock = "SLOT_VERIFY_FAILED", status = "SLOT_VERIFY_FAILED"))
+        val out = Paths.get("build", "screenshots").also { Files.createDirectories(it) }
+        try {
+            for (dark in listOf(false, true)) {
+                ImageComposeScene(880 * 2, 600 * 2, Density(2f)) {
+                    CompositionLocalProvider(LocalTheme provides desktopTheme(Look.MAC, dark)) { App(c, Page.OVERVIEW, null) }
+                }.use { scene ->
+                    scene.render(); scene.render(1_000_000_000)
+                    Files.write(out.resolve("recovery-${if (dark) "dark" else "light"}.png"),
+                        scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+                }
+            }
+        } finally { c.stop() }
+    }
     @Test fun renderPages() {
         if (System.getenv("FUCKPO0JIXIAN_SCREENSHOTS") != "1") return
         val dir = Files.createTempDirectory("fpjx")

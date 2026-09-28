@@ -117,17 +117,36 @@ class Updater(private val version: String, private val dir: Path, private val pr
         const val MAC_SCRIPT = """#!/bin/sh
 PID="${'$'}1"; DMG="${'$'}2"; APP="${'$'}3"
 i=0; while kill -0 "${'$'}PID" 2>/dev/null && [ ${'$'}i -lt 120 ]; do sleep 0.5; i=${'$'}((i+1)); done
-MNT=${'$'}(mktemp -d /tmp/fpjx-update.XXXXXX)
-if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "${'$'}MNT" "${'$'}DMG"; then
-  SRC=${'$'}(ls -d "${'$'}MNT"/*.app | head -n 1)
-  if [ -n "${'$'}SRC" ]; then
-    rm -rf "${'$'}APP.old"
-    if mv "${'$'}APP" "${'$'}APP.old" && ditto "${'$'}SRC" "${'$'}APP"; then rm -rf "${'$'}APP.old"
-    else rm -rf "${'$'}APP"; mv "${'$'}APP.old" "${'$'}APP"; fi
-  fi
+if kill -0 "${'$'}PID" 2>/dev/null; then echo 'Owner still running; installation aborted'; exit 1; fi
+case "${'$'}APP" in /*.app) ;; *) echo 'Invalid application path'; exit 1;; esac
+[ -d "${'$'}APP" ] || exit 1
+MNT=${'$'}(mktemp -d /tmp/fpjx-update.XXXXXX) || exit 1
+cleanup() {
   hdiutil detach "${'$'}MNT" -quiet || hdiutil detach "${'$'}MNT" -force -quiet
+  rmdir "${'$'}MNT" 2>/dev/null || true
+}
+trap cleanup EXIT
+hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "${'$'}MNT" "${'$'}DMG" || exit 1
+set -- "${'$'}MNT"/*.app
+[ "${'$'}#" -eq 1 ] && [ -d "${'$'}1" ] || { echo 'Expected one application'; exit 1; }
+SRC="${'$'}1"
+# Unique sibling directory: never overwrite recovery material from an earlier attempt.
+RECOVERY=${'$'}(mktemp -d "${'$'}APP.recovery.XXXXXX") || exit 1
+BACKUP="${'$'}RECOVERY/backup.app"
+if ! mv "${'$'}APP" "${'$'}BACKUP"; then
+  echo 'Backup failed; original application left untouched'
+  rmdir "${'$'}RECOVERY" 2>/dev/null || true
+  exit 1
 fi
-rmdir "${'$'}MNT" 2>/dev/null
+if ! ditto "${'$'}SRC" "${'$'}APP"; then
+  echo "Copy failed; recovery materials: ${'$'}RECOVERY"
+  # Preserve the partial copy as well if restoration cannot complete.
+  if [ -e "${'$'}APP" ] && ! mv "${'$'}APP" "${'$'}RECOVERY/failed.app"; then exit 1; fi
+  if ! mv "${'$'}BACKUP" "${'$'}APP"; then echo 'Restore failed; backup retained'; exit 1; fi
+  echo 'Original application restored; installation failed'
+  exit 1
+fi
+rm -rf "${'$'}RECOVERY"
 xattr -dr com.apple.quarantine "${'$'}APP" 2>/dev/null
 open "${'$'}APP"
 """

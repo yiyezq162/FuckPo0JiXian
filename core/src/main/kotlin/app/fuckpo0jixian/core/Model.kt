@@ -70,8 +70,12 @@ data class State(
     /** How this device labels itself in exports and on other devices; display only. */
     val deviceName: String = "",
     /** Minutes between local exit comparisons while the network stays the same; this device only. */
-    val fallbackMinutes: Int = FallbackInterval.DEFAULT
+    val fallbackMinutes: Int = FallbackInterval.DEFAULT,
+    /** Durable server rate limit, independent of user-facing status or local retry policy. */
+    val serverNotBefore: Long = 0
 ) : Serializable {
+    fun serverDeadline(): Long = maxOf(serverNotBefore, if (status == "HTTP_429") nextAllowed else 0)
+    fun requestAllowed(time: Long, manual: Boolean) = time >= serverDeadline() && (manual || time >= nextAllowed)
     /** The setting as schedulers use it, always inside the allowed range. */
     val fallbackMs: Long get() = FallbackInterval.clamp(fallbackMinutes) * 60_000L
 }
