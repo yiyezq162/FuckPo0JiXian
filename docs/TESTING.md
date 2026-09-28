@@ -36,6 +36,14 @@ adb -s emulator-5580 shell am instrument -w -e class app.fuckpo0jixian.ReviewSaf
 
 本地报告：`core/build/reports/tests/test/`、`desktop/build/reports/tests/test/`、`app/build/reports/lint-results-preview.html`。截图测试产物在 `desktop/build/screenshots/recovery-*.png`；Android 截图仅含演示数据。只读复核和手动检查遵守同一个服务端等待截止，恢复入口按“明确下一步、区分只读与恢复运行”的交互原则呈现。
 
+## 0.8.3 发布资产核验
+
+标签 `v0.8.3-preview` 指向 `dcf70d2476e8f7131f9499dbe0540808cab50a90`。[标签 CI](https://github.com/yiyezq162/FuckPo0JiXian/actions/runs/36420352390) 的 Android 构建/签名门禁、macOS 测试/DMG、Windows 测试/MSI/EXE 均通过；Mac 脚本 5 项在 macOS 通过、Windows 明确跳过，桌面账户/429 故障测试两端通过。
+
+下载草稿全部 9 个资产核验：6 个安装包/模块文件哈希与对应清单一致。发现旧 CI 桌面清单错误包含自身，导致整份 `shasum -c` 失败；发布前移除两份清单中的自身条目，保留安装包原始字节，3 份清单对所有 6 个文件均通过。后续 CI 已改为只匹配安装包名称，不再把清单纳入哈希输入。此工作流修正随独立后续提交推送，不改写发布标签或安装包。
+
+Preview APK 签名与原发布证书一致，versionName 为 0.8.3-preview、versionCode 18；模块元数据与证书一致。以上为发布文件验证，不是实际安装/运行验收。最终公开状态见 [Release](https://github.com/yiyezq162/FuckPo0JiXian/releases/tag/v0.8.3-preview)。
+
 # 历史：0.6.0-preview 验证记录
 
 2026-09-28。本版改动：去掉 2 分钟最短间隔（手动检查不受限，仅保留自动检查 10 秒防循环、失败退避和平台 429），切网约 3 秒检查，10 分钟兜底改为本机对比出口、变化或满一小时才查询 Po0；免 root 唤起（网络 PendingIntent、Doze 允许的闹钟、开机与更新恢复）；固定槽可选“后台识别”（始终允许位置）；模块同步支持本机 IPv4 变化与 10 分钟兜底唤起，版本号改由 module.prop 读取。

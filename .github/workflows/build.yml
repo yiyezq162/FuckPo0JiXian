@@ -135,7 +135,8 @@ jobs:
             cp "$f" "dist/FuckPo0JiXian-Desktop-$version-${{ matrix.name }}-$arch.${f##*.}"
           done
           ls dist | grep -q . || { echo "::error::no installer produced"; exit 1; }
-          (cd dist && if command -v sha256sum >/dev/null; then sha256sum *; else shasum -a 256 *; fi > "SHA256SUMS-desktop-${{ matrix.name }}")
+          # Only installers: redirecting to a manifest before the inner glob expands includes the manifest itself.
+          (cd dist && if command -v sha256sum >/dev/null; then sha256sum FuckPo0JiXian-Desktop-*; else shasum -a 256 FuckPo0JiXian-Desktop-*; fi > "SHA256SUMS-desktop-${{ matrix.name }}")
           echo "### 桌面端 ${{ matrix.name }} $version" >> "$GITHUB_STEP_SUMMARY"
           ls dist | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
 
