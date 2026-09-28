@@ -7,12 +7,19 @@ import android.location.LocationManager
 import android.net.*
 import android.net.wifi.WifiInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.annotation.RequiresApi
 import app.fuckpo0jixian.core.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-/** No scans and no location coordinates. Only transportInfo for the exact request Network. */
+/**
+ * No scans and no location coordinates. Only transportInfo for the exact request Network.
+ * Watches the physical network (the best non-VPN one), not the app's default: under a VPN the default is the
+ * VPN itself, which carries no Wi-Fi identity.
+ */
 class WifiIdentityObserver(private val context: Context, private val key: (Network) -> String) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     @Volatile var latest: WifiObservation? = null
@@ -45,7 +52,7 @@ class WifiIdentityObserver(private val context: Context, private val key: (Netwo
             override fun onLost(n: Network) { latest = null; changed() }
         }
         callback = cb
-        runCatching { cm.registerDefaultNetworkCallback(cb) }
+        runCatching { registerPhysical(cm, cb) }
     }
     suspend fun observe(network: Network): WifiObservation? {
         if (Build.VERSION.SDK_INT < 31) return null
@@ -61,7 +68,7 @@ class WifiIdentityObserver(private val context: Context, private val key: (Netwo
                     }
                 }
                 continuation.invokeOnCancellation { runCatching { cm.unregisterNetworkCallback(cb) } }
-                runCatching { cm.registerDefaultNetworkCallback(cb) }.onFailure {
+                runCatching { registerPhysical(cm, cb) }.onFailure {
                     if (continuation.isActive) continuation.resume(null)
                 }
             }
@@ -69,4 +76,12 @@ class WifiIdentityObserver(private val context: Context, private val key: (Netwo
     }
     fun stillMatches(o: WifiObservation?): Boolean = if (o == null) Build.VERSION.SDK_INT < 31 else
         o.sameIdentity(latest) && (!o.available || permitted()) && System.currentTimeMillis() - o.time in 0..60_000
+    companion object {
+        /** Wi-Fi or mobile data with internet; NOT_VPN spelled out although the builder already implies it. */
+        val PHYSICAL: NetworkRequest = NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build()
+        /** The network the system would use if no VPN were running. */
+        @RequiresApi(31) fun registerPhysical(cm: ConnectivityManager, cb: ConnectivityManager.NetworkCallback) =
+            cm.registerBestMatchingNetworkCallback(PHYSICAL, cb, Handler(Looper.getMainLooper()))
+    }
 }

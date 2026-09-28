@@ -56,6 +56,9 @@ object Wake {
 
 
     fun scheduleFallback(context: Context, delayMs: Long) {
+        // Wall-clock target, so the log can show how late the system delivered it.
+        context.getSharedPreferences("lifecycle", Context.MODE_PRIVATE).edit()
+            .putLong("fallback_due", System.currentTimeMillis() + delayMs).apply()
         context.getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SystemClock.elapsedRealtime() + delayMs, operation(context, ACTION_FALLBACK))
     }
@@ -70,6 +73,12 @@ object Wake {
 class WakeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val controller = (context.applicationContext as FuckPo0JiXianApp).controller
+        LifeLog.add("WAKE " + when (intent.action) {
+            Wake.ACTION_FALLBACK -> "fallback late=" + context.getSharedPreferences("lifecycle", Context.MODE_PRIVATE).getLong("fallback_due", 0)
+                .takeIf { it > 0 }?.let { "${(System.currentTimeMillis() - it) / 1000}s" }
+            Wake.ACTION_NETWORK -> "network"; Intent.ACTION_BOOT_COMPLETED -> "boot"; Intent.ACTION_MY_PACKAGE_REPLACED -> "updated"
+            else -> intent.action
+        })
         // Network wakes need nothing more: starting the process registers the live callback, which
         // schedules the check, and the check re-arms the wake for the next change once it settles.
         if (intent.action == Wake.ACTION_FALLBACK) controller.fallbackTick()

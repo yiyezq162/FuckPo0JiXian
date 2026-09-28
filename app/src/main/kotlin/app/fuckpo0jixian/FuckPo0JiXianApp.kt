@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.work.*
 import app.fuckpo0jixian.core.*
 import kotlinx.coroutines.*
@@ -23,7 +24,11 @@ import java.util.concurrent.TimeUnit
 
 class FuckPo0JiXianApp : Application() {
     lateinit var controller: Controller
-    override fun onCreate() { super.onCreate(); controller = Controller(this); controller.start() }
+    override fun onCreate() {
+        super.onCreate()
+        LifeLog.init(this); LifeLog.processStart()
+        controller = Controller(this); controller.start()
+    }
 }
 class Controller(private val context: Context) {
     val store = LocalStore(context)
@@ -51,12 +56,20 @@ class Controller(private val context: Context) {
     private var pendingBackground = false
     @Volatile private var requestJob: Job? = null
     private var networkId: String? = null
+    private var lastNetLine: String? = null
     private val stability = Debouncer(policy.debounceMs)
     private var demo = SlotDemoPlatform()
     private var demoScenario = 0
     private var previewSlot: Int? = null
-    private fun trustedPath(n: Network?): Boolean = n != null && cm.getLinkProperties(n)?.httpProxy == null &&
-        cm.defaultProxy == null && cm.allNetworks.none { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
+    /** The best non-VPN network, reported on Android 12+ whatever VPN is the default. */
+    @Volatile private var underlying: Network? = null
+    /**
+     * Every request is bound to the physical network and skips proxies (NetworkTransport), so a VPN / TUN such as
+     * Clash neither carries it nor changes the exit Po0 and the probe see. Only a VPN that forbids bypassing, and
+     * does not exclude this app, can refuse the binding; test that locally before sending anything.
+     */
+    private fun directPath(n: Network): Boolean = cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true ||
+        runCatching { java.net.DatagramSocket().use { n.bindSocket(it) } }.isSuccess
 
     fun start() {
         scope.launch {
@@ -71,10 +84,27 @@ class Controller(private val context: Context) {
             store.save(store.load().copy(deviceName = name.take(24)))
         }
         wifiObserver.start { changed() }
+        ContextCompat.registerReceiver(context, object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                LifeLog.add("DOZE ${if (c.getSystemService(android.os.PowerManager::class.java).isDeviceIdleMode) "on" else "off"}")
+            }
+        }, android.content.IntentFilter(android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         refreshSchedule()
         // An app update finishes cancelling the old install's PendingIntents a few seconds after the new
         // process starts, taking the fresh network wake with it (seen on device). Re-arm once afterwards.
         scope.launch { delay(30_000); if (scheduleEnabled()) Wake.enable(context, fallbackMs()) }
+        if (Build.VERSION.SDK_INT >= 31) runCatching { WifiIdentityObserver.registerPhysical(cm, object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { underlying = network; changed() }
+            override fun onLost(network: Network) { if (underlying == network) underlying = null; changed() }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
+            override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) = changed()
+        }) } else runCatching { cm.registerNetworkCallback(WifiIdentityObserver.PHYSICAL, object : ConnectivityManager.NetworkCallback() {
+            // Physical networks coming, going or re-addressing underneath a VPN; legacyPhysical() picks among them.
+            override fun onAvailable(network: Network) = changed()
+            override fun onLost(network: Network) = changed()
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
+            override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) = changed()
+        }) }
         try { cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = changed()
             override fun onLost(network: Network) = changed()
@@ -88,7 +118,19 @@ class Controller(private val context: Context) {
         demo = SlotDemoPlatform()
         store.load().snapshot?.let { demo.current = it.current; demo.capacity = it.capacity; demo.entries = it.entries; demo.revision = it.revision?.toIntOrNull() ?: 0 }
     }
-    private fun physical(): Network? = cm.activeNetwork?.takeIf { n ->
+    /** Wi-Fi or mobile data, underneath any VPN. */
+    private fun current(): Network? = if (Build.VERSION.SDK_INT >= 31) underlying else legacyPhysical()
+    /** Before Android 12: the default network, or under a VPN the validated Wi-Fi, else foreground mobile data. */
+    private fun legacyPhysical(): Network? {
+        val active = cm.activeNetwork
+        if (cm.getNetworkCapabilities(active)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true) return active
+        val candidates = cm.allNetworks.mapNotNull { n -> cm.getNetworkCapabilities(n)?.let { n to it } }.filter { (_, c) ->
+            !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
+        }
+        return (candidates.firstOrNull { it.second.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } ?: candidates.firstOrNull())?.first
+    }
+    private fun physical(): Network? = current()?.takeIf { n ->
         cm.getNetworkCapabilities(n)?.let { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) && !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) } == true
     }
     private fun kind(n: Network?): String = cm.getNetworkCapabilities(n)?.let {
@@ -98,8 +140,8 @@ class Controller(private val context: Context) {
             else -> "其他网络" }
     } ?: "离线或网络不可用"
     private fun changed() { scope.launch {
-        val n = physical(); networkLabel.value = kind(cm.activeNetwork)
-        currentNetworkKey.value = networkKey(cm.activeNetwork)
+        val n = physical(); networkLabel.value = kind(current() ?: cm.activeNetwork)
+        currentNetworkKey.value = networkKey(current() ?: cm.activeNetwork)
         wifiObservation.value = if (store.load().demo) demoWifi() else wifiObserver.latest
         val identity = wifiObserver.latest
         val id = networkKey(n)?.plus(":${identity?.ssid}:${identity?.bssid}:${identity?.security}:${wifiObserver.permitted()}:${localAddresses(n)}")
@@ -108,6 +150,8 @@ class Controller(private val context: Context) {
         val type = cm.getNetworkCapabilities(n)?.let { c -> when {
             c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"; c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"; else -> "other" } } ?: "none"
         android.util.Log.i("FuckPo0JiXianNet", "change type=$type atMs=${SystemClock.elapsedRealtime()}")
+        val net = "NET $type vpn=${cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true}"
+        if (net != lastNetLine) { lastNetLine = net; LifeLog.add(net) }
         manualPreview.value = null
         networkId = id
         operation?.cancel()
@@ -157,7 +201,9 @@ class Controller(private val context: Context) {
                     .setInputData(workDataOf(CheckWorker.TRIGGER to CheckWorker.FALLBACK))
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
         }
+        KeepAlive.sync(context, scheduleEnabled())
     }
+    fun keepAlive(value: Boolean) { KeepAlive.set(context, value); refreshSchedule() }
     /** Fallback alarm: re-arm first so a failed check never breaks the chain, then run a cheap local comparison. */
     fun fallbackTick() {
         if (!scheduleEnabled()) { Wake.disable(context); return }
@@ -191,10 +237,9 @@ class Controller(private val context: Context) {
                 val now = System.currentTimeMillis()
                 if (state.demo || state.paused) { feedback.value = "请先恢复检查"; return@launch }
                 if (now < state.nextProbeAllowed) { feedback.value = "查询太频繁，请稍后再试"; return@launch }
-                val network = cm.activeNetwork
-                if (network == null || cm.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
-                    feedback.value = "当前没有可用网络"; return@launch
-                }
+                val network = physical()
+                if (network == null) { feedback.value = "当前没有可用网络"; return@launch }
+                if (!withContext(Dispatchers.IO) { directPath(network) }) { feedback.value = statusText("VPN_NO_BYPASS"); return@launch }
                 feedback.value = if (updateDomestic(network)) "已获取国内出口" else "查询失败，保留上次结果"
             } catch (_: CancellationException) {
                 feedback.value = "查询已取消"
@@ -214,7 +259,7 @@ class Controller(private val context: Context) {
         return try {
             val source = ProbeSource.IP3322
             val response = withContext(Dispatchers.IO) { NetworkTransport(network).execute("GET", source.url) }
-            if (cm.activeNetwork != network) throw ApiFailure("NETWORK_CHANGED")
+            if (physical() != network) throw ApiFailure("NETWORK_CHANGED")
             val observed = DomesticProbe.parse(response, now, networkKey(network)!!, source)
             withContext(Dispatchers.IO) { store.save(state.copy(domesticExit = observed, probeStatus = "PROBE_OBSERVED")) }
             true
@@ -243,6 +288,7 @@ class Controller(private val context: Context) {
         val path = (if (enhanced) "enhanced" else if (manual) "manual" else "workmanager") + if (fallback) "-fallback" else ""
         android.util.Log.i("FuckPo0JiXianCheck", "uid=${android.os.Process.myUid()} mode=$selected path=$path " +
             "beginMs=$began endMs=${SystemClock.elapsedRealtime()} httpAttempts=$count result=$safeCode")
+        if (result != "BUSY") LifeLog.add("CHECK $path $safeCode http=$count ${SystemClock.elapsedRealtime() - began}ms")
         // The network has settled by now: arm the one-shot wake for the next change and restart the fallback clock.
         if (result != "BUSY" && result != "CANCELLED_NETWORK_OR_SETTINGS" && scheduleEnabled()) Wake.enable(context, fallbackMs())
         result
@@ -260,14 +306,15 @@ class Controller(private val context: Context) {
                 return "RATE_LIMITED"
             }
             val n = physical()
-            if (!s.demo && (n == null || !trustedPath(n))) { feedback.value = statusText("UNTRUSTED_PATH"); return "UNTRUSTED_PATH" }
+            if (!s.demo && n == null) { feedback.value = statusText("UNTRUSTED_PATH"); return "UNTRUSTED_PATH" }
+            if (!s.demo && !withContext(Dispatchers.IO) { directPath(n!!) }) { feedback.value = statusText("VPN_NO_BYPASS"); return "VPN_NO_BYPASS" }
             val wifi = if (s.demo) demoWifi() else if (kind(n) == "Wi-Fi") wifiObserver.observe(n!!) else null
             wifiObservation.value = wifi
             val startKind = if (s.demo) if (demoScenario in setOf(0, 1, 3, 4, 5, 6)) "wifi" else "cellular" else kind(n)
             val permit = manualPreview.value
             var session = if (s.demo) NetworkSession("demo", startKind, true, demo.current, wifi, permit) { store.load().demo }
                 else NetworkSession(networkKey(n)!!, startKind, false, wifi = wifi, manualPermit = permit) {
-                    physical() == n && trustedPath(n) && !store.load().demo && (startKind != "Wi-Fi" || wifiObserver.stillMatches(wifi)) &&
+                    physical() == n && !store.load().demo && (startKind != "Wi-Fi" || wifiObserver.stillMatches(wifi)) &&
                         (!enhanced || RuntimePolicy.enabled(store.load()))
                 }
             if (!manual) {
@@ -374,7 +421,7 @@ class Controller(private val context: Context) {
     }
     fun exportText(): String {
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
-        return RedactedExport.build(store.load(), "android", version, System.currentTimeMillis())
+        return RedactedExport.build(store.load(), "android", version, System.currentTimeMillis(), lifecycle = LifeLog.recent(600))
     }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
     fun mode(mode: Mode) = edit(scheduleNow = true) { it.copy(mode = mode, lastSuccess = 0) }
@@ -389,6 +436,7 @@ class Controller(private val context: Context) {
     }
     fun revokeWifi(slot: Int) = edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) }
     fun foreground() {
+        LifeLog.add("OPEN")
         updater.check(manual = false) // at most once a day, nothing downloaded without a tap
         refreshSchedule()
         wifiObserver.start { changed() }

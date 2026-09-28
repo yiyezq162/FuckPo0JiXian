@@ -1,6 +1,6 @@
 # 安装、升级与恢复
 
-本次产物为 0.8.1-preview，versionCode 16。应用包名为 app.fuckpo0jixian。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
+本次产物为 0.8.2-preview，versionCode 17。应用包名为 app.fuckpo0jixian。Preview APK 非 debug、启用 R8 和资源压缩，沿用原开发签名策略。Android 9 起可安装；自动固定 Wi-Fi 身份需要 Android 12+ 的必要证据。
 
 ## 安装
 
@@ -18,12 +18,12 @@
 
 标准模式无需 root。可选模块 ZIP 绑定同次构建的 APK 签名，兼容 APK versionCode 7；APK 与模块须同时更新，旧版模块会显示版本不匹配并降级为标准模式。模块协议仍为 1，没有 Wi-Fi 授权、token 或白名单决策。不要把握手等同于成功请求或业务连通。
 
-需要安装时使用同次产物 FuckPo0JiXian-Runtime-0.8.1-preview.zip。模块详细边界见 [说明](../module/README.md)。
+需要安装时使用同次产物 FuckPo0JiXian-Runtime-0.8.2-preview.zip。模块详细边界见 [说明](../module/README.md)。
 
 ## 测试与停止
 
 - 普通 UI / 视觉套件仅用于无真实凭据的专用模拟器；SafeTestRunner 拒绝真实手机上的重置套件。
-- 真机先核对代理。VPN、系统 HTTP 代理或出口证据不一致时拒绝登记，不把代理 IP 加入白名单。透明 root 代理不能仅凭系统标志证明不存在。
+- 请求绑定物理网络且不走代理，VPN / 系统代理不影响登记；VPN 禁止绕过时拒绝检查。出口证据不一致时拒绝登记，不把代理 IP 加入白名单。透明 root 代理不能仅凭系统标志证明不存在。
 - 「概览」页暂停取消后续调度与进行中操作；已发出的 POST 不可撤销，未决状态需只读核对。关闭自动同步不删除远端记录。
 - 模块问题先切标准模式，必要时暂停，再按管理器流程禁用模块。无需清除 APK 状态。
 - 若进行网络切换测试，先记录原设置，结束后恢复；Doze 和厂商后台不保证固定发现时间。

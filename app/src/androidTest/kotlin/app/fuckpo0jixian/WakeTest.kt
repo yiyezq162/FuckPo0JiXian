@@ -17,9 +17,10 @@ class WakeTest {
     // Pending alarms print "tag=" on its own line; removal-history snapshots print "type=... tag=..." instead.
     private fun fallbackAlarms() = shell("dumpsys alarm").lines().count { it.trim().startsWith("tag=*walarm*:${Wake.ACTION_FALLBACK}") }
     // Live requests only: the "Network Requests:" section, not the registration history logs further down.
+    // LISTEN_FOR_BEST is the controller's in-process physical-network tracking, not the wake.
     private fun networkListens() = shell("dumpsys connectivity").lines()
         .dropWhile { it != "Network Requests:" }.drop(1).takeWhile { it.isBlank() || it.startsWith(" ") }
-        .count { it.contains("LISTEN") && it.contains("RequestorPkg: ${context.packageName}") && it.contains("INTERNET") }
+        .count { it.contains("[ LISTEN id=") && it.contains("RequestorPkg: ${context.packageName}") && it.contains("INTERNET") }
 
     @Test fun fallbackAlarmAndNetworkWakeRegisterOnceAndClear() {
         try {

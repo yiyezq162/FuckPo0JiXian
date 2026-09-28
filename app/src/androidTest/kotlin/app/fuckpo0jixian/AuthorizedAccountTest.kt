@@ -48,21 +48,13 @@ class AuthorizedAccountTest {
             assertEquals(before.slotPlan!!.homeSlot, before.layout!!.slots.first { it.purpose == app.fuckpo0jixian.core.SlotPurpose.FIXED }.number)
             assertTrue(before.layout!!.identities.isEmpty())
         }
-        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
-        val visibleVpn = connectivity.allNetworks.any { connectivity.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }
         val requests = NetworkTransport.requests.get()
-        // Do not turn absence of an app-visible VPN into evidence of direct routing.
-        if (visibleVpn) {
-            val code = runBlocking { withTimeout(10_000) { c.runCheck(true, observeOnly = true) } }
-            assertEquals("UNTRUSTED_PATH", code)
-        }
         assertEquals(requests, NetworkTransport.requests.get())
         assertEquals(before, c.store.load())
         // Leave the authorized test phone safely paused; no remote operations or network settings changed.
         instrumentation.runOnMainSync { c.pause(true) }
         runBlocking { withTimeout(5_000) { c.store.flow.first { it.paused } } }
-        println("Upgrade readable; prior configured slots preserved if present; VPN guard=" +
-            (if (visibleVpn) "UNTRUSTED_PATH" else "UNVERIFIED_NO_APP_VISIBLE_VPN") +
+        println("Upgrade readable; prior configured slots preserved if present" +
             "; HTTP attempts=0; paused=true; credentials and network identities withheld")
     }
     @Test fun syncDedicatedSlots() {

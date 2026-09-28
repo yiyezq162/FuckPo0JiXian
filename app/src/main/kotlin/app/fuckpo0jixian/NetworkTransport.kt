@@ -3,6 +3,7 @@ package app.fuckpo0jixian
 import android.net.Network
 import app.fuckpo0jixian.core.*
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.net.Proxy
 import java.net.URL
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
@@ -17,7 +18,8 @@ class NetworkTransport(private val network: Network) : Transport {
         continuation.invokeOnCancellation { executor.execute { synchronized(lock) { connection?.disconnect() } } }
         executor.execute {
             try {
-                val c = network.openConnection(URL(url)) as HttpsURLConnection
+                // Bound to the physical network and never proxied: a VPN / TUN or system proxy cannot carry it.
+                val c = network.openConnection(URL(url), Proxy.NO_PROXY) as HttpsURLConnection
                 synchronized(lock) {
                     if (!continuation.isActive) { c.disconnect(); return@execute }
                     connection = c

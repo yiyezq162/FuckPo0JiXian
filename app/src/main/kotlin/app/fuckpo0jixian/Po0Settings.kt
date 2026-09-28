@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.background
@@ -63,7 +64,7 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
             ListRow("与 Po0 核对", value = "至少每小时")
         }
     }
-    item(key = "po0-background") { BackgroundSection() }
+    item(key = "po0-background") { BackgroundSection(c) }
     item(key = "po0-runtime") { RuntimeSection(s, c, busy) }
     item(key = "po0-about") { AboutSection(s, c) }
 }
@@ -160,21 +161,28 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
 }
 
 /** Standard mode depends on the system letting the app wake up; these are the switches that decide it. */
-@Composable private fun BackgroundSection() {
+@Composable private fun BackgroundSection(c: Controller) {
     val context = LocalContext.current
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val exempt = remember(lifecycle) { context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
     val colors = Apple.colors
     var hidden by remember { mutableStateOf(Recents.hidden(context)) }
-    Section(header = "后台运行", inset = 58.dp, footer = "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」，否则可能被清理。" +
-        "开启「不显示后台任务」后，一键清理最近任务不会清掉本应用。已 root 的设备可改用「模块增强」。") {
+    var resident by remember { mutableStateOf(KeepAlive.enabled(context)) }
+    fun requestExemption() {
+        runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
+            .onFailure { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+    }
+    Section(header = "后台运行", inset = 58.dp, footer = "「常驻运行」最可靠：应用保持在线，网络一变几秒内检查，不耗额外电量，通知栏会有一条静默通知。" +
+        "OPPO、一加、小米等系统还需在应用设置中允许「自启动」和「后台运行」。已 root 的设备可改用「模块增强」。") {
+        ToggleRow("常驻运行", resident, { resident = it; c.keepAlive(it); if (it && !exempt) requestExemption() },
+            subtitle = "保持后台在线，被清理后自动恢复", leading = { IconTile(Glyphs.Shield, colors.green) })
         ToggleRow("不显示后台任务", hidden, { hidden = it; Recents.set(context, it) },
             subtitle = "在最近任务中隐藏本应用", leading = { IconTile(Icons.Rounded.Lock, colors.gray) })
         ListRow("电池优化", value = if (exempt) "不受限制" else "受限制", leading = { IconTile(Glyphs.Bolt, colors.orange) })
-        if (!exempt) ActionRow("允许在后台运行") {
-            runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
-                .onFailure { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
-        }
+        if (!exempt) ActionRow("允许在后台运行") { requestExemption() }
+        val exit = remember(lifecycle) { LifeLog.lastExit() }
+        if (Build.VERSION.SDK_INT >= 30) ListRow("上次被结束", value = exit?.let { "${time(it.first)} · ${it.second}" } ?: "暂无记录",
+            leading = { IconTile(Glyphs.History, colors.gray) })
         ActionRow("自启动与后台设置") {
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
         }
