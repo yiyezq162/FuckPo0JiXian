@@ -20,6 +20,10 @@ class DesktopPrefs(dir: Path) {
     var notify: Boolean
         get() = props.getProperty("notify") != "false"
         set(v) = set("notify", v.toString())
+    /** macOS: menu bar only, no Dock icon. */
+    var hideDock: Boolean
+        get() = props.getProperty("hideDock") == "true"
+        set(v) = set("hideDock", v.toString())
     var lastUpdateCheck: Long
         get() = props.getProperty("lastUpdateCheck")?.toLongOrNull() ?: 0
         set(v) = set("lastUpdateCheck", v.toString())

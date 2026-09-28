@@ -414,6 +414,12 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
     Group("通用") {
         ToggleRow("开机启动", autostart, { Autostart.set(it); autostart = Autostart.enabled() }, icon = Glyph.Power, iconTint = colors.gray,
             subtitle = if (Autostart.available) "登录后在${if (os == Os.MAC) "菜单栏" else "托盘"}运行" else "安装版可用", enabled = Autostart.available)
+        if (os == Os.MAC) {
+            val dockHidden by c.dockHidden.collectAsState()
+            Divider(48.dp)
+            ToggleRow("在程序坞中显示", !dockHidden, { c.hideDock(!it) }, icon = Glyph.Computer, iconTint = colors.gray,
+                subtitle = "关闭后只在菜单栏显示")
+        }
     }
     Text("按路由器识别网络，不需要定位权限。出口直接从本机网卡核对，开着代理或 TUN 也不会把代理地址写入白名单。",
         style = Type.caption, color = colors.secondary, modifier = Modifier.padding(horizontal = 2.dp))

@@ -1,3 +1,10 @@
+# 0.8.5-preview 图标与程序坞（2026-09-28）
+
+- 新图标：三端统一为一只简约小鸡（源图 `art/icon.svg`）。Android 改用矢量图层，并提供主题图标用的单色层；通知栏也换成小鸡剪影。桌面各尺寸由 `scripts/render-icons.sh` 生成。
+- Mac 菜单栏：单色模板图标，由系统按明暗主题着色；轮廓加粗、眼睛放大，保证 22px 下也看得清。
+- Mac 程序坞：「设置 → 通用 → 在程序坞中显示」可以关闭。运行中通过 NSApplication 的激活策略切换，启动时用 `apple.awt.UIElement` 生效，避免图标闪一下。
+- 验证：`MacDockTest`（需显式开启 `FUCKPO0JIXIAN_GUI=1`）在本机实际运行通过，系统读到的应用类型在 Foreground 与 UIElement 之间正确切换；模拟器启动器里新图标显示正常，常规界面套件 26 项通过；core / desktop 单元测试、Android 构建与 Lint 全部通过。
+
 # 0.8.4-preview 审查修复验证（2026-09-28）
 
 本轮修复一次代码审查列出的 20 项问题，随 0.8.4-preview（versionCode 19）发布；没有访问真实 Po0 账户，也没有在真机上安装。从旧版升级时需要最后再更新一次模块，此后更新 APK 不必同步更新模块。

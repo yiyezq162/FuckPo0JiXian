@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Foreground PNGs are 432px (108dp at xxxhdpi), cut from art/icon-source.webp; the art fills the
-         visible centre. Monochrome keeps only the ink lines and the X for themed launchers. -->
+    <!-- Vector layers drawn from art/icon.svg; monochrome serves themed launchers. -->
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
     <monochrome android:drawable="@drawable/ic_launcher_monochrome" />

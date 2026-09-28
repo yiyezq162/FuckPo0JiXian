@@ -1,5 +1,12 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF"
-        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5l-9,-4zM10,17l-4,-4 1.41,-1.41L10,14.17l6.59,-6.59L18,9l-8,8z" />
+    <!-- Status bar: the chick's silhouette, thickened and with a larger eye so it reads at 24dp. -->
+    <group android:scaleX="0.155" android:scaleY="0.155" android:translateX="-4.585" android:translateY="-3.81">
+        <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineJoin="round"
+            android:pathData="M97,60 C92,44 104,36 113,42 C107,46 104,52 103,60 Z" />
+        <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+            android:pathData="M42,114 a58,58 0 1,0 116,0 a58,58 0 1,0 -116,0 Z M111,100 a11,11 0 1,0 22,0 a11,11 0 1,0 -22,0 Z" />
+        <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineJoin="round"
+            android:pathData="M150,104 L168,113 L150,122 Z" />
+    </group>
 </vector>

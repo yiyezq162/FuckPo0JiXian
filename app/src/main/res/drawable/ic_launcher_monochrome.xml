@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Themed icons: the chick's silhouette with its eye cut out; the launcher picks the colour. -->
+    <group android:scaleX="0.42" android:scaleY="0.42" android:translateX="10.32" android:translateY="11.16">
+        <path android:fillColor="#FF000000" android:pathData="M97,60 C92,44 104,36 113,42 C107,46 104,52 103,60 Z" />
+        <path android:fillColor="#FF000000" android:fillType="evenOdd"
+            android:pathData="M46,114 a54,54 0 1,0 108,0 a54,54 0 1,0 -108,0 Z M113,100 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 Z" />
+        <path android:fillColor="#FF000000" android:strokeColor="#FF000000" android:strokeWidth="4" android:strokeLineJoin="round"
+            android:pathData="M150,104 L168,113 L150,122 Z" />
+    </group>
+</vector>

@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- The chick of art/icon.svg (200-unit tile), scaled into the adaptive icon's 66dp safe zone. -->
+    <group android:scaleX="0.42" android:scaleY="0.42" android:translateX="10.32" android:translateY="11.16">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M97,60 C92,44 104,36 113,42 C107,46 104,52 103,60 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M46,114 a54,54 0 1,0 108,0 a54,54 0 1,0 -108,0 Z" />
+        <path android:fillColor="#FFFB8C00" android:strokeColor="#FFFB8C00" android:strokeWidth="4" android:strokeLineJoin="round"
+            android:pathData="M150,104 L168,113 L150,122 Z" />
+        <path android:fillColor="#FF4E342E" android:pathData="M115.5,100 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 Z" />
+        <path android:fillColor="#FFFFE0B2" android:pathData="M60,116 C62,102 80,98 96,110 C88,128 70,132 60,116 Z" />
+    </group>
+</vector>

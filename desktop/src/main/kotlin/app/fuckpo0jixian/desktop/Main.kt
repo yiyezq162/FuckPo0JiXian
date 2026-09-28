@@ -60,6 +60,7 @@ fun main(args: Array<String>) {
         System.setProperty("apple.awt.enableTemplateImages", "true")
         // Title bar follows the system light / dark appearance like the content does.
         System.setProperty("apple.awt.application.appearance", "system")
+        MacDock.applyAtLaunch(DesktopPrefs(dataDir).hideDock)
     }
     if (!SingleInstance.acquire()) exitProcess(0)
     val controller = DesktopController()
@@ -67,13 +68,17 @@ fun main(args: Array<String>) {
     controller.start()
     application {
         var visible by remember { mutableStateOf("--background" !in args) }
-        SingleInstance.onShow = { visible = true }
+        SingleInstance.onShow = { visible = true; if (os == Os.MAC) MacDock.activate() }
         val icon = remember { BitmapPainter(useResource("icon.png", ::loadImageBitmap)) }
         val state by controller.store.flow.collectAsState()
         val busy by controller.busy.collectAsState()
         val update by controller.updater.state.collectAsState()
         val quit = { controller.stop(); exitApplication() }
-        val open = { page: Page? -> visible = true; if (page != null) controller.requestedPage.value = page }
+        val open = { page: Page? ->
+            visible = true
+            if (os == Os.MAC) MacDock.activate()
+            if (page != null) controller.requestedPage.value = page
+        }
         LaunchedEffect(Unit) { runCatching { Desktop.getDesktop().addAppEventListener(AppReopenedListener { visible = true }) } }
         val menu = TrayMenu(state, busy, (update as? app.fuckpo0jixian.core.UpdateState.Available)?.update?.version)
         if (os == Os.MAC) MacStatusItem(controller, menu, open, quit = quit)

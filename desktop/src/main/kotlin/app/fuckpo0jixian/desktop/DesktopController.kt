@@ -57,6 +57,8 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     fun checkForUpdates() = updater.check(scope, manual = true)
     fun installUpdate(update: Update) = updater.install(scope, update) { quit() }
     fun notify(value: Boolean) { prefs.notify = value; notify.value = value }
+    val dockHidden = MutableStateFlow(prefs.hideDock)
+    fun hideDock(value: Boolean) { prefs.hideDock = value; dockHidden.value = value; MacDock.show(!value) }
 
     private fun scheduleEnabled(s: State = store.load()) = !s.paused && !s.demo && !s.authBlocked && s.globalBlock == null && credentialPresent.value
 
