@@ -37,6 +37,18 @@ class SlotUiTest {
         rule.onNodeWithContentDescription("未知 Wi-Fi 也可更新").performScrollTo().assertIsOff()
         rule.onNodeWithText("取消").performClick()
     }
+    @Test fun sameNameApNoticeIsConfirmedFromTheList() {
+        demo(); val before = c.store.load().snapshot; val requests = NetworkTransport.requests.get()
+        val notice = ApNotice.of("Example Home", "02:11:22:33:44:99", WifiSecurity.WPA2)
+        c.store.save(c.store.load().let { it.copy(layout = it.layout!!.copy(notices = setOf(notice))) })
+        rule.onNodeWithText("「Example Home」有新的接入点").performClick()
+        rule.onNodeWithText("加入槽 1「示例住宅」？").assertIsDisplayed()
+        rule.onNodeWithText("加入").performClick()
+        rule.waitUntil { c.store.load().layout!!.notices.isEmpty() }
+        assertTrue(c.store.load().layout!!.identities.first { it.id == "demo-home" }.aps.any { it.bssid == "02:11:22:33:44:99" })
+        rule.onNodeWithText("「Example Home」有新的接入点").assertDoesNotExist()
+        assertEquals(before, c.store.load().snapshot); assertEquals(requests, NetworkTransport.requests.get())
+    }
     @Test fun peerImportLabelsOnlyForeignSlotsAndExportsSplit() {
         demo(); val requests = NetworkTransport.requests.get()
         // 共享分工 keeps what the user's own devices need; 调试信息 masks addresses and Wi-Fi.

@@ -78,6 +78,39 @@ class LayoutSyncTest {
         clock += 120_000; f.snap = f.snap.copy(current = newHome)
         assertEquals("SLOT_UPDATED", check(st, f, wifi(ap = "02:11:22:33:44:09")))
     }
+    @Test fun sameNameApNoticeCanBeConfirmedAwayFromThatWifi() = runTest {
+        val st = MemoryStore(state()); val f = fake(home)
+        assertEquals("UNKNOWN_WIFI", check(st, f, wifi(ap = "02:11:22:33:44:88")))
+        val notice = st.state.layout!!.notices.single()
+        assertEquals(0, ApNotice.slot(st.state.layout!!, notice)!!.number)
+        // Later, on mobile data: the recorded AP is added to the Home slot and the notice goes away.
+        val accepted = LayoutRules.acceptAp(st.state, notice)
+        assertTrue(accepted.layout!!.notices.isEmpty())
+        assertTrue(AuthorizedAp("02:11:22:33:44:88", WifiSecurity.WPA2) in accepted.layout!!.identities.first { it.id == "home" }.aps)
+        st.save(accepted); clock += 120_000; f.snap = f.snap.copy(current = newHome)
+        assertEquals("SLOT_UPDATED", check(st, f, wifi(ap = "02:11:22:33:44:88"))); assertEquals(listOf(0), f.writes)
+    }
+    @Test fun ignoredApStaysUntrustedAndQuiet() = runTest {
+        val st = MemoryStore(state()); val f = fake(home)
+        check(st, f, wifi(ap = "02:11:22:33:44:88"))
+        st.save(LayoutRules.ignoreAp(st.state, st.state.layout!!.notices.single()))
+        clock += 120_000
+        assertEquals("UNKNOWN_WIFI", check(st, f, wifi(ap = "02:11:22:33:44:88")))
+        assertTrue(st.state.layout!!.notices.none { it.startsWith(ApNotice.CONFIRM) })
+        assertFailsWith<IllegalArgumentException> { LayoutRules.acceptAp(st.state, st.state.layout!!.notices.single()) }
+    }
+    @Test fun apNoticesParseColonsAndPruneWhenUnbound() {
+        val notice = ApNotice.of("a:b:c", "C0:B8:E6:2E:35:5A", WifiSecurity.WPA2)
+        assertEquals(ApNotice.Ap("a:b:c", "C0:B8:E6:2E:35:5A", WifiSecurity.WPA2), ApNotice.parse(notice))
+        assertNull(ApNotice.parse("AP_CONFIRM:x:nope:WPA2"))
+        val l = layout().copy(notices = setOf(ApNotice.of("Home", "02:11:22:33:44:88", WifiSecurity.WPA2), "OTHER"))
+        assertEquals(setOf("OTHER"), LayoutRules.revoke(State(layout = l), 0).layout!!.notices)
+    }
+    @Test fun debugExportHashesApNotices() {
+        val s = state().copy(layout = layout().copy(notices = setOf(ApNotice.of("GZYK-02", "c0:b8:e6:2e:35:5a", WifiSecurity.WPA2))))
+        val text = DebugExport.build(s, mapOf("platform" to "android"), clock)
+        assertFalse("GZYK" in text); assertFalse("c0:b8" in text); assertTrue("AP_CONFIRM:#" in text)
+    }
     @Test fun ambiguousIdentityBlocksEvenWhenMobileUnknownWifiAllowed() = runTest {
         val l = layout(); val st = MemoryStore(state().copy(layout = l.copy(identities = l.identities + l.identities.first().copy(id = "other"))))
         val f = fake(); assertEquals("IDENTITY_AMBIGUOUS", check(st, f)); assertTrue(f.writes.isEmpty())

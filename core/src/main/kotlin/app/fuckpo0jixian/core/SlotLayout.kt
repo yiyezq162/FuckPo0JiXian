@@ -38,6 +38,45 @@ data class SlotPending(val account: String, val version: Long, val slot: Int, va
 data class SlotLayout(val version: Long = 1, val slots: List<ManagedSlot> = emptyList(),
                       val identities: List<NetworkIdentity> = emptyList(), val pending: SlotPending? = null,
                       val notices: Set<String> = emptySet()) : Serializable
+/**
+ * A same-name access point this device met but has not trusted: `AP_CONFIRM:<ssid>:<bssid>:<security>`, or
+ * `AP_IGNORED:…` once dismissed. Kept as a notice so it can be confirmed later, away from that Wi-Fi.
+ */
+object ApNotice {
+    const val CONFIRM = "AP_CONFIRM:"
+    const val IGNORED = "AP_IGNORED:"
+    data class Ap(val ssid: String, val bssid: String, val security: WifiSecurity)
+    fun of(ssid: String, bssid: String, security: WifiSecurity) = "$CONFIRM$ssid:$bssid:$security"
+    fun ignored(notice: String) = IGNORED + notice.removePrefix(CONFIRM)
+    /** The SSID may itself contain ':', so the fixed-width BSSID and the security are taken from the right. */
+    fun parse(notice: String): Ap? {
+        val body = when {
+            notice.startsWith(CONFIRM) -> notice.removePrefix(CONFIRM)
+            notice.startsWith(IGNORED) -> notice.removePrefix(IGNORED)
+            else -> return null
+        }
+        val security = WifiSecurity.entries.find { it.name == body.substringAfterLast(':') } ?: return null
+        val rest = body.substringBeforeLast(':')
+        if (rest.length < 19 || rest[rest.length - 18] != ':') return null
+        val bssid = rest.takeLast(17)
+        val ssid = rest.dropLast(18)
+        if (ssid.isBlank() || !bssid.matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}"))) return null
+        return Ap(ssid, bssid, security)
+    }
+    /** The one bound fixed slot a confirmed AP would join, or null when there is no single such slot. */
+    fun slot(layout: SlotLayout, notice: String): ManagedSlot? {
+        val ap = parse(notice) ?: return null
+        val identity = layout.identities.singleOrNull { it.ssid == ap.ssid } ?: return null
+        return layout.slots.singleOrNull { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId == identity.id }
+    }
+    /** Drops notices that no longer ask anything: the name is unbound, or the AP was added since. */
+    fun prune(layout: SlotLayout) = layout.copy(notices = layout.notices.filterNot { n ->
+        val ap = parse(n) ?: return@filterNot false
+        layout.identities.none { it.ssid == ap.ssid } ||
+            layout.identities.any { it.ssid == ap.ssid && it.aps.any { a -> a.bssid.equals(ap.bssid, true) } }
+    }.toSet())
+}
+
 /** Ephemeral confirmation: deliberately absent from StateCodec. */
 data class ManualPermit(val account: String, val version: Long, val slot: Int, val networkKey: String,
                         val wifi: WifiObservation?, val before: Snapshot, val expires: Long)
@@ -106,16 +145,33 @@ object LayoutRules {
         val ap = AuthorizedAp(observation.bssid!!, observation.security)
         val identity = if (addAp && old != null) old.copy(aps = old.aps + ap)
             else NetworkIdentity(java.util.UUID.randomUUID().toString(), name.trim().ifBlank { slot.name.ifBlank { "固定网络" } }.take(40), observation.ssid!!, setOf(ap))
-        return s.copy(layout = layout.copy(version = layout.version + 1,
+        return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
             identities = layout.identities.filterNot { it.id == old?.id } + identity,
-            notices = layout.notices.filterNot { it == "AP_CONFIRM:${observation.ssid}:${observation.bssid}:${observation.security}" }.toSet(),
-            slots = layout.slots.map { if (it.number == number) it.copy(identityId = identity.id, automatic = true, status = "AUTHORIZED_LOCAL") else it }))
+            slots = layout.slots.map { if (it.number == number) it.copy(identityId = identity.id, automatic = true, status = "AUTHORIZED_LOCAL") else it })))
+    }
+    /** Adds the access point a same-name notice recorded to its bound slot; the person confirms it, not the exit. */
+    fun acceptAp(s: State, notice: String): State {
+        val layout = requireNotNull(s.layout)
+        require(layout.pending == null) { "PENDING_REVIEW" }
+        require(notice in layout.notices && notice.startsWith(ApNotice.CONFIRM)) { "CONFIG_INVALID" }
+        val ap = requireNotNull(ApNotice.parse(notice)) { "CONFIG_INVALID" }
+        val slot = ApNotice.slot(layout, notice)
+        require(slot != null && slot.authorized) { "AUTHORIZATION_REQUIRED" }
+        val identity = layout.identities.first { it.id == slot.identityId }
+        val added = identity.copy(aps = identity.aps + AuthorizedAp(ap.bssid, ap.security))
+        return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
+            identities = layout.identities.map { if (it.id == identity.id) added else it })))
+    }
+    /** Keeps the AP untrusted and stops asking about it. */
+    fun ignoreAp(s: State, notice: String): State {
+        val layout = requireNotNull(s.layout)
+        return s.copy(layout = layout.copy(notices = layout.notices.map { if (it == notice) ApNotice.ignored(it) else it }.toSet()))
     }
     fun revoke(s: State, number: Int): State {
         val layout = requireNotNull(s.layout)
-        return s.copy(layout = layout.copy(version = layout.version + 1,
+        return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
             identities = layout.identities.filterNot { it.id == layout.slots.find { p -> p.number == number }?.identityId },
-            slots = layout.slots.map { if (it.number == number) it.copy(identityId = null, automatic = false, status = "IDENTITY_REQUIRED") else it }))
+            slots = layout.slots.map { if (it.number == number) it.copy(identityId = null, automatic = false, status = "IDENTITY_REQUIRED") else it })))
     }
 }
 
@@ -138,7 +194,7 @@ object SlotSelection {
                 return TargetDecision(code = "WIFI_SECURITY_CHANGED")
             val mobile = layout.slots.singleOrNull { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic && it.allowUnknownWifi }
             return TargetDecision(mobile, if (mobile == null) "UNKNOWN_WIFI" else "MOBILE_MATCH",
-                if (sameName) "AP_CONFIRM:${wifi.ssid}:${wifi.bssid}:${wifi.security}" else null)
+                if (sameName) ApNotice.of(wifi.ssid!!, wifi.bssid!!, wifi.security) else null)
         }
         if (session.kind != NetworkKind.CELLULAR) return TargetDecision(code = "NO_TARGET")
         return TargetDecision(layout.slots.singleOrNull { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic }, "MOBILE_MATCH")

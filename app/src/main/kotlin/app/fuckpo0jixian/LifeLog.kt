@@ -6,6 +6,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
+import app.fuckpo0jixian.core.LogRetention
 import app.fuckpo0jixian.core.Redact
 import java.io.File
 import java.time.Instant
@@ -17,10 +18,11 @@ import java.time.temporal.ChronoUnit
  * what people changed, every saved state change, each check's result and the module's own timeline. Addresses are
  * cut to /16 and access point MACs dropped as each line is written ([Redact]); no Token, no Wi-Fi names. Each line
  * starts with an ISO UTC time, so sorting orders them even though an exit is only learned when the next process starts.
+ * Kept for 7 days ([LogRetention]).
  */
 object LifeLog {
-    private const val KEEP = 3_000
     private val lock = Any()
+    private var nextTrim = 0L
     private lateinit var file: File
     private lateinit var appContext: Context
 
@@ -35,20 +37,24 @@ object LifeLog {
         synchronized(lock) {
             runCatching {
                 file.appendText(line + "\n")
-                // Trim in batches so the file is rewritten about once every 500 lines, not on every append.
-                if (file.length() > KEEP * 140L) {
+                // Trim hourly (and at the first line of each process), not on every append; the size check catches a burst.
+                val now = System.currentTimeMillis()
+                if (now >= nextTrim || file.length() > LogRetention.MAX_BYTES) {
+                    nextTrim = now + LogRetention.TRIM_EVERY_MS
                     val lines = file.readLines()
-                    if (lines.size > KEEP + 500) file.writeText(lines.takeLast(KEEP).joinToString("\n", postfix = "\n"))
+                    val kept = LogRetention.keep(lines, now)
+                    if (kept.size != lines.size) file.writeText(kept.joinToString("\n", postfix = "\n"))
                 }
             }
         }
     }
 
     /** Most recent lines, oldest first. */
-    fun recent(limit: Int = KEEP): List<String> = synchronized(lock) {
+    fun recent(limit: Int = LogRetention.MAX_LINES): List<String> = synchronized(lock) {
         if (!::file.isInitialized) return emptyList()
         // By time only, and stably: lines of the same second keep the order they were written in.
-        runCatching { file.readLines() }.getOrDefault(emptyList()).filter { it.isNotBlank() }.sortedBy { it.substringBefore(' ') }.takeLast(limit)
+        LogRetention.keep(runCatching { file.readLines() }.getOrDefault(emptyList()), System.currentTimeMillis())
+            .sortedBy { it.substringBefore(' ') }.takeLast(limit)
     }
 
     /** Process start: first the system's records of how earlier processes ended, then this start's conditions. */

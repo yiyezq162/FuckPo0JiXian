@@ -1,5 +1,6 @@
 package app.fuckpo0jixian.desktop
 
+import app.fuckpo0jixian.core.LogRetention
 import app.fuckpo0jixian.core.Redact
 import java.nio.file.Files
 import java.nio.file.Path
@@ -10,30 +11,32 @@ import java.time.temporal.ChronoUnit
 /**
  * Activity log behind 导出调试信息, the desktop twin of Android's LifeLog: network changes, sleep and wake, what
  * people changed, every saved state change and each check's result. Addresses are cut to /16 and router MACs
- * dropped as each line is written; no Token. Kept to the latest few thousand lines in the data folder.
+ * dropped as each line is written; no Token. Kept for 7 days ([LogRetention]) in the data folder.
  */
 class ActivityLog(dir: Path) {
     private val file = dir.resolve("activity.log")
     private val lock = Any()
+    private var nextTrim = 0L
 
     fun add(text: String, at: Long = System.currentTimeMillis()) {
         val line = "${Instant.ofEpochMilli(at).truncatedTo(ChronoUnit.SECONDS)} ${Redact.text(text.replace('\n', ' ')).take(240)}\n"
         synchronized(lock) {
             runCatching {
                 Files.writeString(file, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
-                // Trim in batches so the file is rewritten about once every 500 lines, not on every append.
-                if (Files.size(file) > KEEP * 140L) {
+                // Trim hourly (and at the first line after launch), not on every append; the size check catches a burst.
+                val now = System.currentTimeMillis()
+                if (now >= nextTrim || Files.size(file) > LogRetention.MAX_BYTES) {
+                    nextTrim = now + LogRetention.TRIM_EVERY_MS
                     val lines = Files.readAllLines(file)
-                    if (lines.size > KEEP + 500) writeAtomically(file, lines.takeLast(KEEP).joinToString("\n", postfix = "\n").toByteArray())
+                    val kept = LogRetention.keep(lines, now)
+                    if (kept.size != lines.size) writeAtomically(file, kept.joinToString("\n", postfix = "\n").toByteArray())
                 }
             }
         }
     }
 
     /** Most recent lines, oldest first. */
-    fun recent(limit: Int = KEEP): List<String> = synchronized(lock) {
-        runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()).filter { it.isNotBlank() }.takeLast(limit)
+    fun recent(limit: Int = LogRetention.MAX_LINES): List<String> = synchronized(lock) {
+        LogRetention.keep(runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()), System.currentTimeMillis()).takeLast(limit)
     }
-
-    private companion object { const val KEEP = 3_000 }
 }

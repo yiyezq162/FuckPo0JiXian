@@ -115,7 +115,9 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
                     (permit.wifi != null && !permit.wifi.sameIdentity(network.wifi))) return finish("MANUAL_EXPIRED")
                 TargetDecision(s.layout!!.slots.find { it.number == permit.slot }, "MANUAL")
             } else SlotSelection.select(s.layout!!, network, now())
-            decision.notice?.let { s = s.copy(layout = s.layout!!.copy(notices = (s.layout!!.notices + it).toList().takeLast(100).toSet())) }
+            decision.notice?.takeIf { ApNotice.ignored(it) !in s.layout!!.notices }?.let {
+                s = s.copy(layout = s.layout!!.copy(notices = (s.layout!!.notices + it).toList().takeLast(100).toSet()))
+            }
             val target = decision.slot ?: return finish(decision.code)
             fun blocked(code: String): String { slotStatus(target.number, code); return finish(code) }
             if (target.writer != Writer.LOCAL || target.purpose == SlotPurpose.RESERVED ||

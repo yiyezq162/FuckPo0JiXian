@@ -479,6 +479,8 @@ class Controller(private val context: Context) {
         require(expected.sameIdentity(actual) && (it.demo || wifiObserver.stillMatches(expected))) { "WIFI_UNAVAILABLE" }
         LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp).copy(lastSuccess = 0)
     } }
+    fun acceptAp(notice: String) = LifeLog.add("USER acceptAp").let { edit(scheduleNow = true) { LayoutRules.acceptAp(it, notice).copy(lastSuccess = 0) } }
+    fun ignoreAp(notice: String) { LifeLog.add("USER ignoreAp"); edit { LayoutRules.ignoreAp(it, notice) } }
     fun revokeWifi(slot: Int) { LifeLog.add("USER revokeWifi $slot"); edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) } }
     fun foreground() {
         LifeLog.add("OPEN")

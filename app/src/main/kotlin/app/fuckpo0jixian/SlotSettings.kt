@@ -104,7 +104,8 @@ internal fun wifiIdentityText(s: State, wifi: WifiObservation?): String? {
     }
 }
 
-internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, background: Boolean, edit: (Int) -> Unit, configure: () -> Unit) {
+internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, background: Boolean, edit: (Int) -> Unit,
+                                     confirmAp: (String) -> Unit, configure: () -> Unit) {
     val snap = s.snapshot
     item(key = "wl-summary") {
         val wifi by c.wifiObservation.collectAsState()
@@ -116,15 +117,21 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
             ListRow("当前网络", value = if (s.demo) "模拟网络" else wifiIdentityText(s, wifi)?.let { "Wi-Fi · $it" } ?: "未使用 Wi-Fi")
         }
     }
+    // Only notices this device can act on: one bound slot to join. The rest are left for the slot editor.
+    val apNotices = s.layout?.let { l -> l.notices.filter { it.startsWith(ApNotice.CONFIRM) }
+        .mapNotNull { n -> ApNotice.parse(n)?.let { ap -> ApNotice.slot(l, n)?.let { slot -> Triple(n, ap, slot) } } } }.orEmpty()
     val notices = listOfNotNull(
-        "发现同名的新接入点，请在对应槽位中确认".takeIf { s.layout?.notices?.any { it.startsWith("AP_CONFIRM:") } == true },
         "旧配置已迁移，固定槽需要重新绑定 Wi-Fi".takeIf { s.layout?.notices?.contains("MIGRATED_WIFI_POLICY_OFF") == true },
         s.globalBlock?.let(::statusText),
         "有待确认的写入，下次检查会先核对".takeIf { s.layout?.pending != null },
         "后台无法识别 Wi-Fi：请在固定槽中开启「Wi-Fi 识别」".takeIf { !s.demo && !background &&
             s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId != null } == true })
-    if (notices.isNotEmpty()) item(key = "wl-notices") {
+    if (notices.isNotEmpty() || apNotices.isNotEmpty()) item(key = "wl-notices") {
         Section(header = "需要注意", inset = 50.dp) {
+            apNotices.forEach { (notice, ap, slot) ->
+                ListRow("「${ap.ssid}」有新的接入点", subtitle = "加入${slotLabel(slot)}前需要你确认", chevron = true, enabled = !busy,
+                    leading = { Icon(Icons.Rounded.Warning, null, tint = Apple.colors.orange, modifier = Modifier.size(22.dp)) }) { confirmAp(notice) }
+            }
             notices.forEach { ListRow(it, leading = { Icon(Icons.Rounded.Warning, null, tint = Apple.colors.orange, modifier = Modifier.size(22.dp)) }) }
         }
     }
@@ -366,6 +373,27 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                     observed?.let { c.bindWifi(original.number, name, add, it) }; bind = null; close()
                 }))
     }
+}
+
+private fun slotLabel(slot: ManagedSlot) = "槽 ${slot.number + 1}" + slot.name.takeIf { it.isNotBlank() }?.let { "「$it」" }.orEmpty()
+
+/** Confirms a same-name access point recorded earlier; works away from that Wi-Fi since the notice holds the AP. */
+@Composable internal fun ApDialog(s: State, c: Controller, busy: Boolean, notice: String?, close: () -> Unit) {
+    val layout = s.layout ?: return
+    val n = notice?.takeIf { it in layout.notices } ?: return
+    val ap = ApNotice.parse(n) ?: return
+    val slot = ApNotice.slot(layout, n) ?: return
+    IosAlert("加入${slotLabel(slot)}？", close,
+        message = "${ap.ssid}\n${ap.bssid} · ${ap.security}",
+        content = {
+            Spacer(Modifier.height(4.dp))
+            Text("同名 Wi-Fi 的另一台路由器或另一个频段。加入后连到它时也会更新此槽；若不认识，请忽略。",
+                style = Apple.footnote, color = Apple.colors.secondary, textAlign = TextAlign.Center)
+        },
+        actions = listOf(
+            AlertAction("加入", preferred = true, enabled = !busy && slot.authorized) { c.acceptAp(n); close() },
+            AlertAction("忽略", destructive = true) { c.ignoreAp(n); close() },
+            AlertAction("取消", onClick = close)))
 }
 
 @Composable internal fun ManualDialog(c: Controller, busy: Boolean) {

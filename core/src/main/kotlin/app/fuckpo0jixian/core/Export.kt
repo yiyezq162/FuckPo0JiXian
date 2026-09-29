@@ -4,6 +4,25 @@ import kotlinx.serialization.json.*
 import java.time.Instant
 
 /**
+ * How long the activity logs behind 调试信息 are kept: the same week as observations and events, with a line ceiling
+ * so a runaway loop cannot grow the file without bound. Lines start with an ISO UTC time; lines without one are kept.
+ */
+object LogRetention {
+    val windowMs = Policy().retentionMs
+    const val MAX_LINES = 20_000
+    /** Above this the file is trimmed at once. A line is at most ~262 bytes, so a trimmed file always fits below it. */
+    const val MAX_BYTES = MAX_LINES * 280L
+    /** Rewrite the file at most this often; between rewrites it may run a little past the window. */
+    const val TRIM_EVERY_MS = 3_600_000L
+    fun keep(lines: List<String>, now: Long): List<String> {
+        val cutoff = now - windowMs
+        return lines.filter { line ->
+            line.isNotBlank() && (runCatching { Instant.parse(line.substringBefore(' ')).toEpochMilli() }.getOrNull() ?: now) >= cutoff
+        }.takeLast(MAX_LINES)
+    }
+}
+
+/**
  * Masking for debug output, applied to whole texts: IPv4 addresses keep their first two parts (/16), IPv6 addresses
  * their first two groups, and MAC addresses (Wi-Fi access points, routers) are dropped. Times such as 03:10:00 and
  * version numbers such as 0.8.5 are left alone.
@@ -118,7 +137,9 @@ object DebugExport {
                     put("id", Redact.tag(n.id, salt)); put("name", n.name); put("ssid", Redact.tag(n.ssid, salt))
                     putJsonArray("aps") { n.aps.forEach { a -> add(buildJsonObject { put("ap", Redact.tag(a.bssid, salt)); put("security", a.security.name) }) } }
                 }) } }
-                putJsonArray("notices") { l.notices.sorted().forEach { add(it) } }
+                putJsonArray("notices") { l.notices.sorted().forEach { n ->
+                    add(ApNotice.parse(n)?.let { ap -> "${n.substringBefore(':')}:${Redact.tag(ap.ssid, salt)}:${Redact.tag(ap.bssid, salt)}:${ap.security}" } ?: n)
+                } }
                 l.pending?.let { p -> putJsonObject("pending") {
                     put("slot", p.slot); put("operation", p.operation); put("version", p.version)
                     put("original", p.original?.value); put("candidate", p.candidate.value); put("time", time(p.time))

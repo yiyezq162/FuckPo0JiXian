@@ -103,6 +103,8 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     val colors = Apple.colors
     val background = rememberBackgroundLocation()
     ManualDialog(c, busy)
+    var apNotice by rememberSaveable { mutableStateOf<String?>(null) }
+    ApDialog(s, c, busy, apNotice) { apNotice = null }
     AnimatedContent(editing, Modifier.fillMaxSize().background(colors.background), label = "editor", transitionSpec = {
         if (targetState != null) (slideInVertically { it } + fadeIn()) togetherWith fadeOut()
         else fadeIn() togetherWith (slideOutVertically { it } + fadeOut())
@@ -125,7 +127,7 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                         }
                         when (page) {
                             0 -> homeItems(s, busy, network, currentKey, credential, c, configure = { page = 2 }) { page = 1 }
-                            1 -> slotItems(s, c, busy, background, edit = { editing = it }) { page = 2 }
+                            1 -> slotItems(s, c, busy, background, edit = { editing = it }, confirmAp = { apNotice = it }) { page = 2 }
                             2 -> po0Items(s, c, credential, busy, requestNotifications)
                             3 -> recordItems(s, history, c)
                         }

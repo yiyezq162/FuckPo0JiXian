@@ -114,4 +114,11 @@ class FallbackIntervalTest {
         assertEquals(listOf(SlotPurpose.FIXED, null, null, SlotPurpose.RESERVED, SlotPurpose.RESERVED), CapacityBar.cells(gaps, layout))
         assertEquals(listOf(SlotPurpose.RESERVED, null), CapacityBar.cells(Snapshot(a, listOf(Entry(a, 0)), 2), null))
     }
+    @Test fun activityLogsKeepSevenDaysUnderALineCeiling() {
+        val now = java.time.Instant.parse("2026-09-29T12:00:00Z").toEpochMilli()
+        val lines = listOf("2026-09-22T11:59:59Z OLD", "2026-09-22T12:00:00Z EDGE", "", "no time KEPT", "2026-09-29T11:00:00Z NEW")
+        assertEquals(listOf("2026-09-22T12:00:00Z EDGE", "no time KEPT", "2026-09-29T11:00:00Z NEW"), LogRetention.keep(lines, now))
+        val flood = List(LogRetention.MAX_LINES + 5) { "2026-09-29T11:00:00Z L$it" }
+        assertEquals("2026-09-29T11:00:00Z L5", LogRetention.keep(flood, now).first())
+    }
 }
