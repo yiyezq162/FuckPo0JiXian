@@ -17,22 +17,29 @@ class SlotUiTest {
     private fun demo() {
         val previous = c.store.load().accountContext
         rule.runOnUiThread { c.demo(true) }
-        rule.waitUntil(5_000) { c.store.load().demo && c.store.load().accountContext != previous && c.store.load().layout?.identities?.size == 2 }
+        rule.waitUntil(5_000) { c.store.load().demo && c.store.load().accountContext != previous && c.store.load().layout?.identities?.size == 3 }
         rule.onNodeWithTag("tab-1").performClick()
     }
     private fun open(number: Int) {
         rule.onNodeWithTag("page-list").performScrollToNode(hasTestTag("slot-$number"))
         rule.onNodeWithTag("slot-$number").performClick()
     }
-    @Test fun bindAndRevokeAreLocalAndUnknownWifiDefaultIsOff() {
+    @Test fun removeAndBindAreLocalAndUnknownWifiDefaultIsOff() {
         demo(); val before = c.store.load().snapshot; val requests = NetworkTransport.requests.get()
+        fun home() = c.store.load().layout!!.slots.first { it.number == 0 }
         open(1)
+        rule.onNodeWithTag("network-Example Home").performScrollTo().performClick()
+        rule.onNodeWithText("移除「Example Home」").performScrollTo().performClick()
+        rule.waitUntil { !home().bound }
         rule.onNodeWithText("绑定当前 Wi-Fi").performScrollTo().performClick()
         rule.onNodeWithText("授权并绑定").performClick()
-        rule.waitUntil { c.store.load().layout!!.version > 1 }
+        rule.waitUntil { home().bound }
         assertEquals(before, c.store.load().snapshot); assertEquals(requests, NetworkTransport.requests.get())
-        open(1); rule.onNodeWithText("撤销绑定").performScrollTo().performClick()
-        rule.waitUntil { c.store.load().layout!!.slots.first { it.number == 0 }.identityId == null }
+        // The office slot follows two Wi-Fi names; the home Wi-Fi stays with its own slot.
+        open(2)
+        rule.onNodeWithTag("network-Example Office 2F").performScrollTo().assertExists()
+        rule.onNodeWithText("当前 Wi-Fi 已绑定槽 1「示例住宅」").performScrollTo().assertExists()
+        rule.onNodeWithText("取消").performClick()
         open(3)
         rule.onNodeWithContentDescription("未知 Wi-Fi 也可更新").performScrollTo().assertIsOff()
         rule.onNodeWithText("取消").performClick()
@@ -97,7 +104,7 @@ class SlotUiTest {
             rule.waitUntil { c.store.load().status != prior }
         }
         open(1)
-        rule.onNodeWithText("绑定当前 Wi-Fi").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithText("添加当前 Wi-Fi").performScrollTo().assertIsNotEnabled()
         rule.onNodeWithText("手动更新一次").performScrollTo().assertExists()
         rule.onNodeWithText("取消").performClick()
     }
@@ -171,8 +178,9 @@ class SlotUiTest {
         rule.onNodeWithText("保存").performClick()
         rule.waitUntil { c.store.load().layout!!.slots.first { it.number == 4 }.authorized }
         rule.onNodeWithText("完成").assertExists()
-        rule.onNodeWithText("绑定当前 Wi-Fi").performScrollTo().assertIsEnabled()
-        assertNull(c.store.load().layout!!.slots.first { it.number == 4 }.identityId)
+        // The binding step is in view; the demo's Wi-Fi already belongs to slot 1, so it is not offered twice.
+        rule.onNodeWithText("当前 Wi-Fi 已绑定槽 1「示例住宅」").performScrollTo().assertExists()
+        assertFalse(c.store.load().layout!!.slots.first { it.number == 4 }.bound)
         rule.onNodeWithText("完成").performClick()
         rule.onNodeWithTag("page-list").assertExists()
     }

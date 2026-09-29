@@ -13,8 +13,8 @@ class LayoutSyncTest {
     private fun wifi(ssid: String = "Home", ap: String = "02:11:22:33:44:01", security: WifiSecurity = WifiSecurity.WPA2) =
         WifiObservation("n", ssid, ap, security, clock)
     private fun layout() = SlotLayout(slots = listOf(
-        ManagedSlot(0, "Home", SlotPurpose.FIXED, Writer.LOCAL, "home", true, authorized = true, baseline = home),
-        ManagedSlot(1, "Office", SlotPurpose.FIXED, Writer.LOCAL, "office", true, authorized = true, baseline = office),
+        ManagedSlot(0, "Home", SlotPurpose.FIXED, Writer.LOCAL, listOf("home"), true, authorized = true, baseline = home),
+        ManagedSlot(1, "Office", SlotPurpose.FIXED, Writer.LOCAL, listOf("office"), true, authorized = true, baseline = office),
         ManagedSlot(2, "Phone", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, authorized = true, baseline = mobile),
         ManagedSlot(3, "Other", SlotPurpose.MOBILE, Writer.OTHER_DEVICE), ManagedSlot(4, "Reserve")
     ), identities = listOf(NetworkIdentity("home", "Home", "Home", setOf(
@@ -303,11 +303,44 @@ class LayoutSyncTest {
     @Test fun authorizationMustBeExplicitAndBindingNeverWritesOrSilentlyAddsAp() {
         val s = state().copy(snapshot = fake().snap, lastCheck = clock)
         assertFails { LayoutRules.saveSlot(s, ManagedSlot(3, purpose = SlotPurpose.MOBILE, writer = Writer.LOCAL, automatic = true), false, clock) }
-        val bound = LayoutRules.bind(s, 0, wifi(), clock, "Custom name", false)
+        val bound = LayoutRules.bind(s, 0, wifi("Home 5G", "02:11:22:33:44:31"), clock, "Custom name")
         assertEquals("Custom name", bound.layout!!.identities.last().name)
         assertEquals(s.snapshot, bound.snapshot)
-        assertFails { LayoutRules.bind(bound, 0, wifi("Changed SSID"), clock, "", true) }
+        // A network bound to another slot is never moved over silently.
+        val refused = assertFailsWith<IllegalArgumentException> { LayoutRules.bind(bound, 0, wifi("Office", "02:11:22:33:44:02", WifiSecurity.WPA3), clock, "") }
+        assertEquals("NETWORK_BOUND_ELSEWHERE", refused.message)
         val cleared = State(); assertNull(cleared.layout); assertNotEquals(s.accountContext, cleared.accountContext)
+    }
+    @Test fun oneSlotFollowsSeveralNetworksThatShareAnExit() = runTest {
+        // The office has a second Wi-Fi name on another floor, leaving through the same exit.
+        val s = LayoutRules.bind(state(), 1, wifi("Office 2F", "02:11:22:33:44:12"), clock, "")
+        val office2f = s.layout!!.identities.single { it.ssid == "Office 2F" }
+        assertEquals(listOf("office", office2f.id), s.layout!!.slots.first { it.number == 1 }.identityIds)
+        // Joining another AP of a name already bound here adds it to that network, not a new one.
+        val mesh = LayoutRules.bind(s, 1, wifi("Office 2F", "02:11:22:33:44:13"), clock, "")
+        assertEquals(2, mesh.layout!!.slots.first { it.number == 1 }.identityIds.size)
+        assertEquals(2, mesh.layout!!.identities.single { it.ssid == "Office 2F" }.aps.size)
+        val st = MemoryStore(mesh); val f = fake(Cidr("198.18.40.0/24"))
+        assertEquals("SLOT_UPDATED", check(st, f, wifi("Office 2F", "02:11:22:33:44:13"))); assertEquals(listOf(1), f.writes)
+        clock += 120_000; f.snap = f.snap.copy(current = Cidr("198.18.41.0/24"))
+        assertEquals("SLOT_UPDATED", check(st, f, wifi("Office", "02:11:22:33:44:02", WifiSecurity.WPA3))); assertEquals(listOf(1, 1), f.writes)
+        // Survives a restart, and an older single-network state still reads.
+        assertEquals(st.state, StateCodec.decode(StateCodec.encode(st.state)))
+        val legacy = StateCodec.encode(state()).replace(Regex(""","identityIds":\[[^\]]*\]"""), "")
+        assertEquals(listOf("home"), StateCodec.decode(legacy).layout!!.slots.first().identityIds)
+        // Removing one network keeps the other; removing the last unbinds the slot and forgets the network.
+        val one = LayoutRules.unbind(st.state, 1, "office")
+        assertEquals(listOf(office2f.id), one.layout!!.slots.first { it.number == 1 }.identityIds)
+        assertTrue(one.layout!!.identities.none { it.id == "office" })
+        val none = LayoutRules.unbind(one, 1, office2f.id).layout!!
+        assertFalse(none.slots.first { it.number == 1 }.bound); assertFalse(none.slots.first { it.number == 1 }.automatic)
+        assertTrue(none.identities.none { it.ssid.startsWith("Office") })
+    }
+    @Test fun changingSlotPurposeForgetsItsNetworks() {
+        val s = state().copy(snapshot = fake().snap, lastCheck = clock)
+        val reserved = LayoutRules.saveSlot(s, s.layout!!.slots.first().copy(purpose = SlotPurpose.RESERVED), false, clock).layout!!
+        assertFalse(reserved.slots.first { it.number == 0 }.bound)
+        assertTrue(reserved.identities.none { it.id == "home" })
     }
     @Test fun manualWithUnavailableIdentityWorksOnlyForAuthorizedBaselineAndFreshExit() = runTest {
         val st = MemoryStore(state().copy(mode = Mode.OBSERVE)); val f = fake()

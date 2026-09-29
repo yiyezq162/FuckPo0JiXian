@@ -25,9 +25,16 @@ class AppUpdater(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
 
-    fun check(manual: Boolean) {
+    /** The release the update dialog is offering; null when no dialog is shown. */
+    val offer = MutableStateFlow<Update?>(null)
+
+    /** [propose]: offer what the check finds in the update dialog, unless that version was skipped. */
+    fun check(manual: Boolean, interval: Long = Updates.AUTO_INTERVAL_MS, propose: Boolean = false) {
         if (job?.isActive == true) return
-        if (!manual && System.currentTimeMillis() - prefs.getLong("checked", 0) < Updates.AUTO_INTERVAL_MS) return
+        if (!manual && System.currentTimeMillis() - prefs.getLong("checked", 0) < interval) {
+            if (propose) propose((state.value as? UpdateState.Available)?.update)
+            return
+        }
         job = scope.launch {
             val before = state.value
             if (manual) state.value = UpdateState.Checking
@@ -35,9 +42,23 @@ class AppUpdater(private val context: Context) {
                 val update = client.check(version, Updates::androidAsset)
                 prefs.edit().putLong("checked", System.currentTimeMillis()).apply()
                 state.value = if (update != null) UpdateState.Available(update) else UpdateState.Latest(System.currentTimeMillis())
+                if (propose) propose(update)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { state.value = if (manual) UpdateState.Failed(updateText((e as? ApiFailure)?.code ?: "UPDATE_OFFLINE")) else before }
         }
+    }
+
+    /** The app came back to the foreground: look for a release and offer it, at most every few minutes. */
+    fun resumed() = check(manual = false, interval = Updates.RESUME_INTERVAL_MS, propose = true)
+
+    /** 跳过此版本: the dialog never offers this version again; the settings page still can install it. */
+    fun skip(update: Update) {
+        prefs.edit().putString("skipped", update.version).apply()
+        offer.value = null
+    }
+    fun closeOffer() { offer.value = null }
+    private fun propose(update: Update?) {
+        if (Updates.offer(update, prefs.getString("skipped", null))) offer.value = update
     }
 
     fun install(update: Update) {

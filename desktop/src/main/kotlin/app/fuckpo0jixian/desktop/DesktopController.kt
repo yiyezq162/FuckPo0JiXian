@@ -62,6 +62,8 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         scope.launch { while (isActive) { updater.check(this, manual = false); delay(3_600_000) } }
     }
     fun checkForUpdates() = updater.check(scope, manual = true)
+    /** The main window came into view (opened, shown from the tray or Dock, restored from minimized). */
+    fun resumed() { activity.add("OPEN"); updater.resumed(scope) }
     fun installUpdate(update: Update) = updater.install(scope, update) { quit() }
     fun notify(value: Boolean) { prefs.notify = value; notify.value = value }
     val dockHidden = MutableStateFlow(prefs.hideDock)
@@ -251,13 +253,14 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         activity.add("USER saveSlot ${slot.number}")
         edit(scheduleNow = true) { LayoutRules.saveSlot(it, slot, acknowledged, now()) }
     }
-    /** Binds the router this computer is connected to right now. */
+    /** Adds the router this computer is connected to right now to the slot's networks. */
     fun bindNetwork(slot: Int, name: String) = activity.add("USER bindNetwork $slot").let { edit(scheduleNow = true) {
         val observation = network().observation(now())
         require(observation != null) { "GATEWAY_UNAVAILABLE" }
-        LayoutRules.bind(it, slot, observation, now(), name, false).copy(lastSuccess = 0)
+        LayoutRules.bind(it, slot, observation, now(), name).copy(lastSuccess = 0)
     } }
     fun revokeNetwork(slot: Int) { activity.add("USER revokeNetwork $slot"); edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) } }
+    fun unbindNetwork(slot: Int, identityId: String) { activity.add("USER unbindNetwork $slot"); edit(scheduleNow = true) { LayoutRules.unbind(it, slot, identityId).copy(lastSuccess = 0) } }
     fun importPeers(peer: PeerLayout) {
         activity.add("USER import from=${peer.device} slots=${peer.slots.size}")
         var count = 0

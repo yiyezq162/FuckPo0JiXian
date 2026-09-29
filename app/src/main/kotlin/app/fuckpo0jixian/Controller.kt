@@ -474,17 +474,17 @@ class Controller(private val context: Context) {
         LayoutRules.saveSlot(it, slot, acknowledged, System.currentTimeMillis())
     } }
     // Binding changes what Po0 should hold: drop the local-comparison shortcut and check right away.
-    fun bindWifi(slot: Int, name: String, addAp: Boolean, expected: WifiObservation) = LifeLog.add("USER bindWifi $slot addAp=$addAp").let { edit(scheduleNow = true) {
+    fun bindWifi(slot: Int, name: String, expected: WifiObservation) = LifeLog.add("USER bindWifi $slot").let { edit(scheduleNow = true) {
         val actual = if (it.demo) demoWifi() else wifiObserver.latest
         require(expected.sameIdentity(actual) && (it.demo || wifiObserver.stillMatches(expected))) { "WIFI_UNAVAILABLE" }
-        LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name, addAp).copy(lastSuccess = 0)
+        LayoutRules.bind(it, slot, expected, System.currentTimeMillis(), name).copy(lastSuccess = 0)
     } }
     fun acceptAp(notice: String) = LifeLog.add("USER acceptAp").let { edit(scheduleNow = true) { LayoutRules.acceptAp(it, notice).copy(lastSuccess = 0) } }
     fun ignoreAp(notice: String) { LifeLog.add("USER ignoreAp"); edit { LayoutRules.ignoreAp(it, notice) } }
     fun revokeWifi(slot: Int) { LifeLog.add("USER revokeWifi $slot"); edit(scheduleNow = true) { LayoutRules.revoke(it, slot).copy(lastSuccess = 0) } }
+    fun unbindWifi(slot: Int, identityId: String) { LifeLog.add("USER unbindWifi $slot"); edit(scheduleNow = true) { LayoutRules.unbind(it, slot, identityId).copy(lastSuccess = 0) } }
     fun foreground() {
         LifeLog.add("OPEN")
-        updater.check(manual = false) // at most once a day, nothing downloaded without a tap
         refreshSchedule()
         wifiObserver.start { changed() }
         manualPreview.value = null
@@ -547,13 +547,15 @@ class Controller(private val context: Context) {
         demo.entries = listOf(Entry(Cidr("192.0.2.0/24"), 0), Entry(Cidr("198.51.100.0/24"), 1),
             Entry(Cidr("203.0.112.0/24"), 2), Entry(Cidr("203.0.114.0/24"), 3), Entry(Cidr("198.51.99.0/24")))
         val layout = SlotLayout(slots = listOf(
-            ManagedSlot(0, "示例住宅", SlotPurpose.FIXED, Writer.LOCAL, "demo-home", true, authorized = true, baseline = demo.entries[0].cidr),
-            ManagedSlot(1, "示例办公室", SlotPurpose.FIXED, Writer.LOCAL, "demo-office", true, authorized = true, baseline = demo.entries[1].cidr),
+            ManagedSlot(0, "示例住宅", SlotPurpose.FIXED, Writer.LOCAL, listOf("demo-home"), true, authorized = true, baseline = demo.entries[0].cidr),
+            // An office with two Wi-Fi names behind one exit: both update the same slot.
+            ManagedSlot(1, "示例办公室", SlotPurpose.FIXED, Writer.LOCAL, listOf("demo-office", "demo-office-2f"), true, authorized = true, baseline = demo.entries[1].cidr),
             ManagedSlot(2, "这台手机", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, authorized = true, baseline = demo.entries[2].cidr),
             ManagedSlot(3, "另一台手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE), ManagedSlot(4, "保留用途")
         ), identities = listOf(
             NetworkIdentity("demo-home", "示例住宅", "Example Home", setOf(AuthorizedAp("02:11:22:33:44:01", WifiSecurity.WPA2))),
-            NetworkIdentity("demo-office", "示例办公室", "Example Office", setOf(AuthorizedAp("02:11:22:33:44:02", WifiSecurity.WPA3)))))
+            NetworkIdentity("demo-office", "示例办公室", "Example Office", setOf(AuthorizedAp("02:11:22:33:44:02", WifiSecurity.WPA3))),
+            NetworkIdentity("demo-office-2f", "示例办公室", "Example Office 2F", setOf(AuthorizedAp("02:11:22:33:44:03", WifiSecurity.WPA2)))))
         wifiObservation.value = demoWifi()
         return base.copy(layout = layout, snapshot = Snapshot(demo.current, demo.entries, 5, demo.revision.toString()), lastCheck = System.currentTimeMillis())
     }

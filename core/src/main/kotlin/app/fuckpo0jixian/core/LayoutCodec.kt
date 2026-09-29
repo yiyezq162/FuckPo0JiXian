@@ -11,7 +11,9 @@ internal object LayoutCodec {
         put("version", l.version)
         putJsonArray("slots") { l.slots.forEach { s -> add(buildJsonObject {
             put("number", s.number); put("name", s.name); put("purpose", s.purpose.name); put("writer", s.writer.name)
-            put("identityId", s.identityId); put("automatic", s.automatic); put("allowUnknownWifi", s.allowUnknownWifi)
+            // identityId: the first network, so an older version reading this state keeps one binding.
+            put("identityId", s.identityIds.firstOrNull()); putJsonArray("identityIds") { s.identityIds.forEach { add(it) } }
+            put("automatic", s.automatic); put("allowUnknownWifi", s.allowUnknownWifi)
             put("authorized", s.authorized); put("baseline", s.baseline?.value); put("status", s.status)
             put("legacyPending", s.legacyPending?.value); put("temporaryHold", s.temporaryHold)
             put("owner", s.owner); put("shared", s.shared); put("changedAt", s.changedAt)
@@ -30,7 +32,7 @@ internal object LayoutCodec {
     fun decode(o: JsonObject): SlotLayout = SlotLayout(o.l("version"), o.getValue("slots").jsonArray.map { e ->
         val s = e.jsonObject
         ManagedSlot(s.l("number").toInt(), s.s("name"), SlotPurpose.valueOf(s.s("purpose")), Writer.valueOf(s.s("writer")),
-            s.n("identityId"), s.b("automatic"), s.b("allowUnknownWifi"), s.b("authorized"), s.n("baseline")?.let(::Cidr),
+            s["identityIds"]?.jsonArray?.map { it.jsonPrimitive.content } ?: listOfNotNull(s.n("identityId")), s.b("automatic"), s.b("allowUnknownWifi"), s.b("authorized"), s.n("baseline")?.let(::Cidr),
             s.s("status"), s.n("legacyPending")?.let(::Cidr), s.b("temporaryHold"),
             s.n("owner") ?: "", s.n("shared")?.toBooleanStrictOrNull() ?: false, s.n("changedAt")?.toLongOrNull() ?: 0)
     }, o.getValue("identities").jsonArray.map { e ->

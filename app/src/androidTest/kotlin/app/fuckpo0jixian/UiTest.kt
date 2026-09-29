@@ -34,6 +34,22 @@ class UiTest {
         rule.waitUntil { controller.store.load().runtimeMode == RuntimeMode.STANDARD }
         assertEquals(original, LocalStore(rule.activity).load())
     }
+    @Test fun updateSheetOffersReleaseAndSkippingSilencesThatVersion() {
+        val updater = controller.updater
+        val update = Update(Release("99.0.0-preview", "- 一个槽位可绑定多个 Wi-Fi", Updates.PAGE, emptyList()),
+            ReleaseAsset("FuckPo0JiXian-99.0.0-preview.apk", Updates.PAGE, 1))
+        rule.runOnUiThread { updater.offer.value = update }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("update-sheet").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("发现新版本").assertExists()
+        rule.onNodeWithText("一个槽位可绑定多个 Wi-Fi").assertExists()
+        rule.onNodeWithText("跳过此版本").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("update-sheet").fetchSemanticsNodes().isEmpty() }
+        // Found again on a later return to the app: not offered.
+        rule.runOnUiThread { updater.state.value = UpdateState.Available(update); updater.check(manual = false, interval = Long.MAX_VALUE, propose = true) }
+        rule.waitForIdle()
+        assertNull(updater.offer.value)
+        rule.runOnUiThread { updater.state.value = UpdateState.Idle }
+    }
     @Test fun fiveSlotConfigurationPreservesRemoteAndPersistsLocallyWithoutRequest() {
         val home = Cidr("198.51.100.0/24")
         val mobile = Cidr("203.0.113.0/24")

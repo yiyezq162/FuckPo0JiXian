@@ -80,6 +80,8 @@ fun main(args: Array<String>) {
             if (page != null) controller.requestedPage.value = page
         }
         LaunchedEffect(Unit) { runCatching { Desktop.getDesktop().addAppEventListener(AppReopenedListener { visible = true }) } }
+        // Opening the window from the tray, menu bar or Dock is the moment to offer an update.
+        LaunchedEffect(visible) { if (visible) controller.resumed() }
         val menu = TrayMenu(state, busy, (update as? app.fuckpo0jixian.core.UpdateState.Available)?.update?.version)
         if (os == Os.MAC) MacStatusItem(controller, menu, open, quit = quit)
         else {
@@ -125,6 +127,14 @@ fun main(args: Array<String>) {
                 }
             }
             LaunchedEffect(theme) { if (os == Os.WINDOWS) WindowsTitleBar.match(window, dark, theme.colors.window) }
+            // So is restoring it from minimized.
+            DisposableEffect(window) {
+                val restore = object : java.awt.event.WindowAdapter() {
+                    override fun windowDeiconified(e: java.awt.event.WindowEvent) = controller.resumed()
+                }
+                window.addWindowListener(restore)
+                onDispose { window.removeWindowListener(restore) }
+            }
             CompositionLocalProvider(LocalTheme provides theme) {
                 App(controller, titleBar = if (os == Os.MAC) { m -> WindowDraggableArea(m) { Box(Modifier.fillMaxSize()) } } else null)
             }

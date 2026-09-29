@@ -27,6 +27,10 @@ class DesktopPrefs(dir: Path) {
     var lastUpdateCheck: Long
         get() = props.getProperty("lastUpdateCheck")?.toLongOrNull() ?: 0
         set(v) = set("lastUpdateCheck", v.toString())
+    /** The version the update dialog was turned down for; it is not offered again. */
+    var skippedUpdate: String?
+        get() = props.getProperty("skippedUpdate")
+        set(v) = set("skippedUpdate", v.orEmpty())
 }
 
 /**
@@ -47,9 +51,16 @@ class Updater(private val version: String, private val dir: Path, private val pr
         else -> Updates.desktopAsset(v, "macos", arch, "dmg")
     }
 
-    fun check(scope: CoroutineScope, manual: Boolean) {
+    /** The release the update dialog is offering; null when no dialog is shown. */
+    val offer = MutableStateFlow<Update?>(null)
+
+    /** [propose]: offer what the check finds in the update dialog, unless that version was skipped. */
+    fun check(scope: CoroutineScope, manual: Boolean, interval: Long = Updates.AUTO_INTERVAL_MS, propose: Boolean = false) {
         if (job?.isActive == true) return
-        if (!manual && System.currentTimeMillis() - prefs.lastUpdateCheck < Updates.AUTO_INTERVAL_MS) return
+        if (!manual && System.currentTimeMillis() - prefs.lastUpdateCheck < interval) {
+            if (propose) propose((state.value as? UpdateState.Available)?.update)
+            return
+        }
         job = scope.launch(Dispatchers.IO) {
             val before = state.value
             if (manual) state.value = UpdateState.Checking
@@ -57,6 +68,7 @@ class Updater(private val version: String, private val dir: Path, private val pr
                 val update = client.check(version, ::assetName)
                 prefs.lastUpdateCheck = System.currentTimeMillis()
                 state.value = if (update != null) UpdateState.Available(update) else UpdateState.Latest(System.currentTimeMillis())
+                if (propose) propose(update)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 // A silent daily check that fails leaves no message behind.
@@ -83,6 +95,19 @@ class Updater(private val version: String, private val dir: Path, private val pr
     }
 
     fun cancel() { job?.cancel() }
+
+    /** The window was opened, shown from the tray / Dock, or restored from minimized: offer a new release. */
+    fun resumed(scope: CoroutineScope) = check(scope, manual = false, interval = Updates.RESUME_INTERVAL_MS, propose = true)
+
+    /** 跳过此版本: the dialog never offers this version again; the settings page can still install it. */
+    fun skip(update: Update) {
+        prefs.skippedUpdate = update.version
+        offer.value = null
+    }
+    fun closeOffer() { offer.value = null }
+    private fun propose(update: Update?) {
+        if (Updates.offer(update, prefs.skippedUpdate)) offer.value = update
+    }
 
     private fun openFile(file: File) = runCatching { java.awt.Desktop.getDesktop().open(file) }
 

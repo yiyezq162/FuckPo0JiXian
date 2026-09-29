@@ -125,7 +125,7 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
         s.globalBlock?.let(::statusText),
         "有待确认的写入，下次检查会先核对".takeIf { s.layout?.pending != null },
         "后台无法识别 Wi-Fi：请在固定槽中开启「Wi-Fi 识别」".takeIf { !s.demo && !background &&
-            s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId != null } == true })
+            s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.bound } == true })
     if (notices.isNotEmpty() || apNotices.isNotEmpty()) item(key = "wl-notices") {
         Section(header = "需要注意", inset = 50.dp) {
             apNotices.forEach { (notice, ap, slot) ->
@@ -193,7 +193,7 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
     var shared by remember { mutableStateOf(original.shared) }
     var acknowledge by remember { mutableStateOf(false) }
     var bind by remember { mutableStateOf<Boolean?>(null) }
-    var showAps by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var bindNext by remember { mutableStateOf(false) }
     val wifi by c.wifiObservation.collectAsState()
@@ -224,7 +224,7 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
             else -> backgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         }
     }
-    val identity = s.layout?.identities?.find { it.id == original.identityId }
+    val networks = s.layout?.networksOf(original).orEmpty()
     val remote = s.snapshot?.entries?.find { it.slot == original.number }?.cidr
     val colors = Apple.colors
     val scroll = rememberScrollState()
@@ -244,7 +244,7 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
             c.configureSlot(candidate, acknowledge)
             val saved = validation.getOrNull()?.layout?.slots?.find { it.number == original.number }
             error = null
-            if (saved != null && saved.purpose == SlotPurpose.FIXED && saved.writer == Writer.LOCAL && saved.authorized && saved.identityId == null) {
+            if (saved != null && saved.purpose == SlotPurpose.FIXED && saved.writer == Writer.LOCAL && saved.authorized && !saved.bound) {
                 bindNext = true; acknowledge = false
             } else close()
         }
@@ -331,20 +331,32 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                         !background -> "仅前台"
                         else -> "已开启"
                     }
-                    Section(header = "Wi-Fi 绑定", footer = "只读取 Wi-Fi 名称和接入点，不获取位置。后台自动更新需要位置权限「始终允许」。") {
-                        if (bindNext && identity == null) ListRow("已保存。连接到要绑定的 Wi-Fi，然后点「绑定当前 Wi-Fi」。", titleColor = colors.green)
-                        ListRow("已绑定", value = identity?.ssid ?: "未绑定")
+                    // Several networks may share one exit (an office with two Wi-Fi names): all of them update this slot.
+                    val here = networks.find { usable && it.ssid == wifi?.ssid }
+                    val knownAp = here != null && here.aps.any { it.bssid.equals(wifi?.bssid, true) && it.security == wifi?.security }
+                    val elsewhere = s.layout?.let { l -> l.identities.find { usable && it.ssid == wifi?.ssid && it.id !in original.identityIds }?.let { l.slotOf(it.id) } }
+                    Section(header = "Wi-Fi 绑定", footer = "可绑定多个出口相同的 Wi-Fi，连上其中任何一个都会更新此槽。只读取名称和接入点，不获取位置；后台更新需要位置权限「始终允许」。") {
+                        if (bindNext && networks.isEmpty()) ListRow("已保存。连接到要绑定的 Wi-Fi，然后点「绑定当前 Wi-Fi」。", titleColor = colors.green)
+                        if (networks.isEmpty()) ListRow("已绑定", value = "未绑定")
+                        networks.forEach { n ->
+                            ListRow(n.ssid, Modifier.testTag("network-${n.ssid}"), subtitle = "${n.aps.size} 个接入点" + if (n == here) " · 当前连接" else "",
+                                chevron = expanded != n.id) { expanded = if (expanded == n.id) null else n.id }
+                            if (expanded == n.id) {
+                                n.aps.forEach { ListRow(it.bssid, value = it.security.name) }
+                                ActionRow("移除「${n.ssid}」", color = colors.red, enabled = !busy) { c.unbindWifi(original.number, n.id); expanded = null }
+                            }
+                        }
                         ListRow("当前 Wi-Fi", value = if (usable) wifi?.ssid else "无法读取")
                         access?.let { value ->
                             ListRow("Wi-Fi 识别", value = value)
                             if (Build.VERSION.SDK_INT >= 31 && value != "已开启") ActionRow("一键开启 Wi-Fi 识别", onClick = ::enableWifiAccess)
                         }
-                        ActionRow("绑定当前 Wi-Fi", enabled = usable && !busy) { bind = false }
-                        if (identity != null) {
-                            ActionRow("添加当前接入点", enabled = usable && !busy) { bind = true }
-                            ListRow("已授权接入点", value = "${identity.aps.size} 个", chevron = !showAps) { showAps = !showAps }
-                            if (showAps) identity.aps.forEach { ListRow(it.bssid, value = it.security.name) }
-                            ActionRow("撤销绑定", color = colors.red, enabled = !busy) { c.revokeWifi(original.number); close() }
+                        when {
+                            knownAp -> ListRow("当前 Wi-Fi 已绑定此槽", titleColor = colors.secondary)
+                            here != null -> ActionRow("添加当前接入点", enabled = !busy) { bind = true }
+                            elsewhere != null -> ListRow("当前 Wi-Fi 已绑定${slotLabel(elsewhere)}", titleColor = colors.secondary)
+                            else -> ActionRow(if (networks.isEmpty()) "绑定当前 Wi-Fi" else "添加当前 Wi-Fi",
+                                enabled = usable && !busy && networks.size < LayoutRules.MAX_NETWORKS) { bind = false }
                         }
                     }
                     Section(footer = if (s.paused) "需先在概览中恢复检查。" else "现场核对出口后更新一次，不会保存 Wi-Fi 授权。") {
@@ -363,14 +375,15 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
             message = "${observed?.ssid ?: "未知网络"}\n${observed?.bssid ?: "未知接入点"} · ${observed?.security ?: "未知"}",
             content = {
                 Spacer(Modifier.height(4.dp))
-                Text("此网络的出口变化时，将自动更新槽 ${original.number + 1}。可防止误连，但无法防范刻意伪造的同名热点。",
+                Text((if (!add && networks.isNotEmpty()) "与已绑定的 ${networks.size} 个网络一起更新槽 ${original.number + 1}，请确认它们出口相同。"
+                    else "此网络的出口变化时，将自动更新槽 ${original.number + 1}。") + "可防止误连，但无法防范刻意伪造的同名热点。",
                     style = Apple.footnote, color = colors.secondary, textAlign = TextAlign.Center)
                 elsewhere?.let { e -> Text("当前出口位于${e.slot?.let { "槽 ${it + 1}" } ?: "未分配槽号的记录"}，绑定不会移动已有记录。",
                     style = Apple.footnote, color = colors.orange, textAlign = TextAlign.Center) }
             },
             actions = listOf(AlertAction("取消") { bind = null },
                 AlertAction("授权并绑定", preferred = true, enabled = observed != null && !busy) {
-                    observed?.let { c.bindWifi(original.number, name, add, it) }; bind = null; close()
+                    observed?.let { c.bindWifi(original.number, name, it) }; bind = null; close()
                 }))
     }
 }

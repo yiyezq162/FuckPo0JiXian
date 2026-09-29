@@ -42,6 +42,14 @@ object Updates {
     const val PAGE = "https://github.com/$REPO/releases"
     /** Automatic checks at most once a day; the button always checks. */
     const val AUTO_INTERVAL_MS = 24 * 3_600_000L
+    /**
+     * Bringing the app back (from the background on Android, from the tray or the Dock, or out of a minimized window
+     * on a computer) looks for a release at most this often: GitHub allows 60 anonymous requests an hour.
+     */
+    const val RESUME_INTERVAL_MS = 10 * 60_000L
+
+    /** Whether coming back to the app should offer [update] in a dialog: once turned down, a version is never offered again. */
+    fun offer(update: Update?, skipped: String?): Boolean = update != null && update.version != skipped
 
     fun androidAsset(version: String) = "FuckPo0JiXian-$version.apk"
     /** The Magisk / KernelSU module released together with the APK of the same version. */

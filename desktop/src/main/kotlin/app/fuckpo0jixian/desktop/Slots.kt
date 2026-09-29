@@ -157,7 +157,7 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
     var bind by remember { mutableStateOf(false) }
     val link by c.link.collectAsState()
     val remote = s.snapshot?.entries?.find { it.slot == original.number }?.cidr
-    val identity = s.layout?.identities?.find { it.id == original.identityId }
+    val networks = s.layout?.networksOf(original).orEmpty()
     val bindable = original.purpose == SlotPurpose.FIXED && original.writer == Writer.LOCAL && original.authorized
     val candidate = original.copy(name = name, purpose = purpose, writer = writer, owner = owner, automatic = automatic,
         // On a computer "外出跟随" means: any network that is not bound to a fixed slot.
@@ -234,19 +234,33 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
             }
             if (purpose == SlotPurpose.FIXED && writer == Writer.LOCAL) {
                 if (!bindable) Group("网络绑定", footer = "授权并保存后即可绑定当前网络。") { SettingRow("保存后可绑定", icon = Glyph.Router, iconTint = colors.gray, titleColor = colors.secondary) }
-                else Group("网络绑定", footer = "按路由器识别，有线和 Wi-Fi 都适用，不需要定位权限。") {
-                    ValueRow("已绑定", identity?.let { "${it.name} · ${it.ssid.removePrefix("gw:")}" } ?: "未绑定", icon = Glyph.Router, iconTint = colors.accent)
+                else Group("网络绑定", footer = "按路由器识别，有线和 Wi-Fi 都适用，不需要定位权限。出口相同的多个网络（如公司的有线和无线）可绑定到同一槽。") {
+                    // Every bound router, each removable on its own; the current one is marked.
+                    val gateway = link?.gatewayIp?.let { "gw:$it" }
+                    if (networks.isEmpty()) ValueRow("已绑定", "未绑定", icon = Glyph.Router, iconTint = colors.gray)
+                    networks.forEachIndexed { i, n ->
+                        if (i > 0) Divider(48.dp)
+                        val current = n.ssid == gateway && n.aps.any { it.bssid == link?.gatewayMac }
+                        SettingRow(n.ssid.removePrefix("gw:"), subtitle = "路由器 ${n.aps.size} 台" + if (current) " · 当前连接" else "",
+                            icon = Glyph.Router, iconTint = if (current) colors.green else colors.accent) {
+                            Button("移除", { c.unbindNetwork(original.number, n.id) }, ButtonKind.SUBTLE, enabled = !busy)
+                        }
+                    }
                     Divider(48.dp)
-                    val here = identity != null && identity.ssid == "gw:${link?.gatewayIp}" && identity.aps.any { it.bssid == link?.gatewayMac }
+                    val here = networks.any { n -> n.ssid == gateway && n.aps.any { it.bssid == link?.gatewayMac } }
+                    val elsewhere = s.layout?.let { l -> l.identities.find { it.ssid == gateway && it.id !in original.identityIds }?.let { l.slotOf(it.id) } }
                     SettingRow("当前网络", subtitle = link?.label ?: "未连接", icon = Glyph.Globe, iconTint = colors.indigo) {
-                        if (here) Tag("就是这里", colors.green, Glyph.Check)
-                        else Button(if (identity == null) "绑定" else "改绑到这里", { bind = true }, enabled = !busy && link?.gatewayMac != null)
+                        when {
+                            here -> Tag("已绑定", colors.green, Glyph.Check)
+                            elsewhere != null -> Tag("已绑定槽 ${elsewhere.number + 1}", colors.gray)
+                            else -> Button(if (networks.isEmpty()) "绑定" else "添加到此槽", { bind = true },
+                                enabled = !busy && link?.gatewayMac != null && networks.size < LayoutRules.MAX_NETWORKS)
+                        }
                     }
                     if (link?.gatewayIp != null && link?.gatewayMac == null) {
                         Divider(48.dp)
                         RouterUnreadable()
                     }
-                    if (identity != null) { Divider(48.dp); SettingRow("撤销绑定", icon = Glyph.Power, iconTint = colors.red, titleColor = colors.red, enabled = !busy, onClick = { c.revokeNetwork(original.number) }) }
                 }
                 if (bindable) Group(footer = if (s.paused) "需先恢复检查。" else "现场核对出口后更新一次，不保存绑定。") {
                     SettingRow("手动更新一次", icon = Glyph.Sync, iconTint = colors.accent, enabled = !busy && !s.paused, onClick = { c.previewManual(original.number) })
@@ -256,7 +270,9 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
         }
         VerticalScrollbar(rememberScrollbarAdapter(scroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp))
     }
-    if (bind) Alert("绑定当前网络？", { bind = false }, message = "${link?.label ?: "未知网络"}\n出口变化时自动更新槽 ${original.number + 1}。能防误连，防不了刻意仿冒的路由器。",
+    if (bind) Alert(if (networks.isEmpty()) "绑定当前网络？" else "添加当前网络？", { bind = false }, message = "${link?.label ?: "未知网络"}\n" +
+        (if (networks.isEmpty()) "出口变化时自动更新槽 ${original.number + 1}。" else "与已绑定的 ${networks.size} 个网络一起更新槽 ${original.number + 1}，请确认出口相同。") +
+        "能防误连，防不了刻意仿冒的路由器。",
         actions = listOf(DialogAction("授权并绑定", preferred = true, enabled = !busy) { c.bindNetwork(original.number, name); bind = false },
             DialogAction("取消") { bind = false }))
 }

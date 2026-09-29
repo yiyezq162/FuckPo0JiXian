@@ -20,8 +20,12 @@ data class WifiObservation(val networkKey: String, val ssid: String?, val bssid:
     fun sameIdentity(other: WifiObservation?) = other != null &&
         copy(time = 0) == other.copy(time = 0)
 }
+/**
+ * A Po0 slot as this device sees it. A FIXED slot may be bound to several networks ([identityIds]): an office with
+ * two Wi-Fi names or a wired and a wireless router, all leaving through the same exit, updates one slot.
+ */
 data class ManagedSlot(val number: Int, val name: String = "", val purpose: SlotPurpose = SlotPurpose.RESERVED,
-                       val writer: Writer = Writer.EXTERNAL, val identityId: String? = null,
+                       val writer: Writer = Writer.EXTERNAL, val identityIds: List<String> = emptyList(),
                        val automatic: Boolean = false, val allowUnknownWifi: Boolean = false,
                        val authorized: Boolean = false, val baseline: Cidr? = null,
                        val status: String = "UNMANAGED", val legacyPending: Cidr? = null,
@@ -31,13 +35,25 @@ data class ManagedSlot(val number: Int, val name: String = "", val purpose: Slot
                        /** LOCAL fixed slot that other devices on the same network may also update. */
                        val shared: Boolean = false,
                        /** When this device last saw someone else change the occupant. */
-                       val changedAt: Long = 0) : Serializable
+                       val changedAt: Long = 0) : Serializable {
+    val bound: Boolean get() = identityIds.isNotEmpty()
+}
 data class SlotPending(val account: String, val version: Long, val slot: Int, val operation: String,
                        val original: Cidr?, val candidate: Cidr, val identityId: String?,
                        val before: Snapshot, val time: Long) : Serializable
 data class SlotLayout(val version: Long = 1, val slots: List<ManagedSlot> = emptyList(),
                       val identities: List<NetworkIdentity> = emptyList(), val pending: SlotPending? = null,
-                      val notices: Set<String> = emptySet()) : Serializable
+                      val notices: Set<String> = emptySet()) : Serializable {
+    /** The networks bound to [slot], in the order they were added. */
+    fun networksOf(slot: ManagedSlot): List<NetworkIdentity> = slot.identityIds.mapNotNull { id -> identities.find { it.id == id } }
+    /** The slot a network belongs to; null when it belongs to none. */
+    fun slotOf(identityId: String): ManagedSlot? = slots.find { identityId in it.identityIds }
+    /** Networks no slot refers to any more match nothing, so they are dropped. */
+    fun withoutOrphans(): SlotLayout {
+        val used = slots.flatMap { it.identityIds }.toSet()
+        return copy(identities = identities.filter { it.id in used })
+    }
+}
 /**
  * A same-name access point this device met but has not trusted: `AP_CONFIRM:<ssid>:<bssid>:<security>`, or
  * `AP_IGNORED:…` once dismissed. Kept as a notice so it can be confirmed later, away from that Wi-Fi.
@@ -67,7 +83,7 @@ object ApNotice {
     fun slot(layout: SlotLayout, notice: String): ManagedSlot? {
         val ap = parse(notice) ?: return null
         val identity = layout.identities.singleOrNull { it.ssid == ap.ssid } ?: return null
-        return layout.slots.singleOrNull { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.identityId == identity.id }
+        return layout.slots.singleOrNull { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && identity.id in it.identityIds }
     }
     /** Drops notices that no longer ask anything: the name is unbound, or the AP was added since. */
     fun prune(layout: SlotLayout) = layout.copy(notices = layout.notices.filterNot { n ->
@@ -99,7 +115,8 @@ object LayoutRules {
             layout.slots.map { it.number }.distinct().size != layout.slots.size ||
             layout.slots.any { it.number !in 0 until snap.capacity } ||
             layout.slots.count { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic } > 1 ||
-            layout.identities.map { it.id }.distinct().size != layout.identities.size)
+            layout.identities.map { it.id }.distinct().size != layout.identities.size ||
+            layout.slots.flatMap { it.identityIds }.let { it.distinct().size != it.size })
             throw ApiFailure("SLOT_INVALID")
     }
     /** Whether saving [slot] over [old] grants new automatic power, so the editor must ask for「授权本机管理」again. */
@@ -124,30 +141,42 @@ object LayoutRules {
         val next = slot.copy(name = slot.name.trim().take(40), owner = slot.owner.trim().take(24), shared = shared,
             authorized = slot.writer == Writer.LOCAL && slot.purpose != SlotPurpose.RESERVED && (acknowledge || (old?.authorized == true && !changedAuthority)),
             baseline = if (acknowledge) occupant else old?.baseline,
-            identityId = if (changedAuthority) null else old.identityId,
+            identityIds = if (changedAuthority) emptyList() else old.identityIds,
             status = if (acknowledge) "AUTHORIZED_LOCAL" else old?.status ?: "UNMANAGED",
             // Confirming takes the slot as it is now; an earlier change elsewhere no longer holds this device back.
             changedAt = if (acknowledge) 0 else slot.changedAt,
             legacyPending = if (acknowledge) null else old?.legacyPending)
-        val updated = layout.copy(version = layout.version + 1, slots = layout.slots.filterNot { it.number == slot.number } + next)
+        val updated = layout.copy(version = layout.version + 1, slots = layout.slots.filterNot { it.number == slot.number } + next).withoutOrphans()
         require(updated.slots.count { it.purpose == SlotPurpose.MOBILE && it.writer == Writer.LOCAL && it.automatic } <= 1) { "CONFIG_MOBILE_LIMIT" }
         validate(snap, updated)
         return s.copy(layout = updated, lastSuccess = 0)
     }
-    fun bind(s: State, number: Int, observation: WifiObservation, now: Long, name: String, addAp: Boolean): State {
+    /** How many networks one fixed slot may hold; an office rarely has more names than this. */
+    const val MAX_NETWORKS = 8
+
+    /**
+     * Binds the network [observation] describes to fixed slot [number]. A network already bound to this slot under
+     * the same name gains the access point (another router or band of it); any other name is added next to the
+     * networks the slot already has, so one slot can follow several networks that share an exit. A name bound to
+     * another slot is refused: one network updates one slot.
+     */
+    fun bind(s: State, number: Int, observation: WifiObservation, now: Long, name: String): State {
         require(observation.usable(now, observation.networkKey)) { "WIFI_UNAVAILABLE" }
         val layout = requireNotNull(s.layout)
         require(layout.pending == null) { "PENDING_REVIEW" }
         val slot = layout.slots.first { it.number == number }
         require(slot.purpose == SlotPurpose.FIXED && slot.writer == Writer.LOCAL && slot.authorized) { "AUTHORIZATION_REQUIRED" }
-        val old = layout.identities.find { it.id == slot.identityId }
-        require(!addAp || old?.ssid == observation.ssid) { "REBIND_REQUIRED" }
+        val sameName = layout.identities.filter { it.ssid == observation.ssid }
+        require(sameName.all { it.id in slot.identityIds }) { "NETWORK_BOUND_ELSEWHERE" }
         val ap = AuthorizedAp(observation.bssid!!, observation.security)
-        val identity = if (addAp && old != null) old.copy(aps = old.aps + ap)
-            else NetworkIdentity(java.util.UUID.randomUUID().toString(), name.trim().ifBlank { slot.name.ifBlank { "固定网络" } }.take(40), observation.ssid!!, setOf(ap))
+        val old = sameName.singleOrNull()
+        val identity = old?.copy(aps = old.aps + ap)
+            ?: NetworkIdentity(java.util.UUID.randomUUID().toString(), name.trim().ifBlank { slot.name.ifBlank { "固定网络" } }.take(40), observation.ssid!!, setOf(ap))
+        val ids = if (old != null) slot.identityIds else slot.identityIds + identity.id
+        require(ids.size <= MAX_NETWORKS) { "NETWORK_LIMIT" }
         return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
-            identities = layout.identities.filterNot { it.id == old?.id } + identity,
-            slots = layout.slots.map { if (it.number == number) it.copy(identityId = identity.id, automatic = true, status = "AUTHORIZED_LOCAL") else it })))
+            identities = layout.identities.filterNot { it.id == identity.id } + identity,
+            slots = layout.slots.map { if (it.number == number) it.copy(identityIds = ids, automatic = true, status = "AUTHORIZED_LOCAL") else it })))
     }
     /** Adds the access point a same-name notice recorded to its bound slot; the person confirms it, not the exit. */
     fun acceptAp(s: State, notice: String): State {
@@ -157,7 +186,7 @@ object LayoutRules {
         val ap = requireNotNull(ApNotice.parse(notice)) { "CONFIG_INVALID" }
         val slot = ApNotice.slot(layout, notice)
         require(slot != null && slot.authorized) { "AUTHORIZATION_REQUIRED" }
-        val identity = layout.identities.first { it.id == slot.identityId }
+        val identity = layout.networksOf(slot).first { it.ssid == ap.ssid }
         val added = identity.copy(aps = identity.aps + AuthorizedAp(ap.bssid, ap.security))
         return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
             identities = layout.identities.map { if (it.id == identity.id) added else it })))
@@ -167,15 +196,26 @@ object LayoutRules {
         val layout = requireNotNull(s.layout)
         return s.copy(layout = layout.copy(notices = layout.notices.map { if (it == notice) ApNotice.ignored(it) else it }.toSet()))
     }
+    /** Removes every network bound to slot [number]; the slot stops updating until it is bound again. */
     fun revoke(s: State, number: Int): State {
         val layout = requireNotNull(s.layout)
         return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
-            identities = layout.identities.filterNot { it.id == layout.slots.find { p -> p.number == number }?.identityId },
-            slots = layout.slots.map { if (it.number == number) it.copy(identityId = null, automatic = false, status = "IDENTITY_REQUIRED") else it })))
+            slots = layout.slots.map { if (it.number == number) it.copy(identityIds = emptyList(), automatic = false, status = "IDENTITY_REQUIRED") else it })
+            .withoutOrphans()))
+    }
+    /** Removes one network from slot [number]; the last one leaves the slot unbound, as [revoke] does. */
+    fun unbind(s: State, number: Int, identityId: String): State {
+        val layout = requireNotNull(s.layout)
+        val slot = layout.slots.first { it.number == number }
+        if (slot.identityIds == listOf(identityId)) return revoke(s, number)
+        return s.copy(layout = ApNotice.prune(layout.copy(version = layout.version + 1,
+            slots = layout.slots.map { if (it.number == number) it.copy(identityIds = it.identityIds - identityId) else it })
+            .withoutOrphans()))
     }
 }
 
-data class TargetDecision(val slot: ManagedSlot? = null, val code: String, val notice: String? = null)
+/** [identityId]: the bound network that matched, recorded with a fixed write. */
+data class TargetDecision(val slot: ManagedSlot? = null, val code: String, val notice: String? = null, val identityId: String? = null)
 object SlotSelection {
     fun select(layout: SlotLayout, session: NetworkSession, now: Long): TargetDecision {
         val wifi = session.wifi
@@ -184,9 +224,9 @@ object SlotSelection {
             val exact = layout.identities.filter { it.ssid == wifi.ssid && AuthorizedAp(wifi.bssid!!, wifi.security) in it.aps }
             if (exact.size > 1) return TargetDecision(code = "IDENTITY_AMBIGUOUS")
             if (exact.size == 1) {
-                val targets = layout.slots.filter { it.purpose == SlotPurpose.FIXED && it.identityId == exact.single().id }
+                val targets = layout.slots.filter { it.purpose == SlotPurpose.FIXED && exact.single().id in it.identityIds }
                 if (targets.size != 1) return TargetDecision(code = "IDENTITY_AMBIGUOUS")
-                return TargetDecision(targets.single(), "FIXED_MATCH")
+                return TargetDecision(targets.single(), "FIXED_MATCH", identityId = exact.single().id)
             }
             val sameName = layout.identities.any { it.ssid == wifi.ssid }
             // A changed security policy on an already known AP is not an unknown Wi-Fi authorization.

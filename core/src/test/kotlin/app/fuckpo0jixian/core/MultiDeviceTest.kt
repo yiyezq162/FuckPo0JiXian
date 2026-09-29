@@ -13,7 +13,7 @@ class MultiDeviceTest {
     private val ap = "02:11:22:33:44:01"
     private fun wifi() = WifiObservation("n", "Home", ap, WifiSecurity.WPA2, clock)
     private fun layout(shared: Boolean) = SlotLayout(slots = listOf(
-        ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, "home", true, authorized = true, baseline = home, shared = shared),
+        ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, listOf("home"), true, authorized = true, baseline = home, shared = shared),
         ManagedSlot(1, "公司", SlotPurpose.FIXED, Writer.OTHER_DEVICE, owner = "Windows"),
         ManagedSlot(2, "手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE, owner = "手机"),
         ManagedSlot(3, "外部"), ManagedSlot(4)

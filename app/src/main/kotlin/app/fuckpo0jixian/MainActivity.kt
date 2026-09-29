@@ -49,6 +49,8 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     override fun onResume() { super.onResume(); Recents.apply(this); (application as FuckPo0JiXianApp).controller.foreground() }
+    /** Opened, or brought back from the background (not after a permission prompt): look for an update to offer. */
+    override fun onStart() { super.onStart(); (application as FuckPo0JiXianApp).controller.updater.resumed() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -103,6 +105,7 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     val colors = Apple.colors
     val background = rememberBackgroundLocation()
     ManualDialog(c, busy)
+    UpdateSheet(c.updater)
     var apNotice by rememberSaveable { mutableStateOf<String?>(null) }
     ApDialog(s, c, busy, apNotice) { apNotice = null }
     AnimatedContent(editing, Modifier.fillMaxSize().background(colors.background), label = "editor", transitionSpec = {

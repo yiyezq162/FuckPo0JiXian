@@ -36,7 +36,7 @@ class DesktopControllerTest {
         c.store.save(State(mode = Mode.AUTO, paused = false, accountContext = "acct", deviceName = "Mac",
             snapshot = Snapshot(Cidr("198.51.100.0/24"), listOf(Entry(Cidr("198.51.100.0/24"), 0)), 5),
             layout = SlotLayout(slots = listOf(
-                ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, "home", true, authorized = true, baseline = Cidr("198.51.100.0/24")),
+                ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, listOf("home"), true, authorized = true, baseline = Cidr("198.51.100.0/24")),
                 ManagedSlot(1, "外出", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, allowUnknownWifi = true, authorized = true),
                 ManagedSlot(2, "手机", SlotPurpose.MOBILE, Writer.OTHER_DEVICE, owner = "小米 14")),
                 identities = listOf(NetworkIdentity("home", "家", "gw:192.168.5.1", setOf(AuthorizedAp("a4:11:22:33:44:55", WifiSecurity.GATEWAY)))))))

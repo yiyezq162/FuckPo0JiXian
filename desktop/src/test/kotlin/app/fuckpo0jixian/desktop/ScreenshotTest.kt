@@ -49,12 +49,13 @@ class ScreenshotTest {
             events = listOf("SLOT_UPDATED", "PEER_UPDATED", "SLOT_CURRENT", "LOCAL_UNCHANGED", "SLOT_CURRENT", "SLOT_CURRENT", "SLOT_CURRENT")
                 .mapIndexed { i, code -> Event(now - (7 - i) * 1_800_000L, code) },
             layout = SlotLayout(slots = listOf(
-                ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, "home", true, authorized = true, baseline = home, shared = true, status = "SLOT_CURRENT"),
+                ManagedSlot(0, "家", SlotPurpose.FIXED, Writer.LOCAL, listOf("home", "home-wired"), true, authorized = true, baseline = home, shared = true, status = "SLOT_CURRENT"),
                 ManagedSlot(1, "公司", SlotPurpose.MOBILE, Writer.OTHER_DEVICE, owner = "Windows", status = "PEER_UPDATED", changedAt = now - 3_600_000),
                 ManagedSlot(2, "手机", SlotPurpose.FIXED, Writer.OTHER_DEVICE, owner = "小米 14"),
                 ManagedSlot(3, "笔记本外出", SlotPurpose.MOBILE, Writer.LOCAL, automatic = true, allowUnknownWifi = true, authorized = true, status = "AUTHORIZED_LOCAL"),
                 ManagedSlot(4, "保留")),
-                identities = listOf(NetworkIdentity("home", "家", "gw:192.168.5.1", setOf(AuthorizedAp("a4:11:22:33:44:55", WifiSecurity.GATEWAY)))))))
+                identities = listOf(NetworkIdentity("home", "家", "gw:192.168.5.1", setOf(AuthorizedAp("a4:11:22:33:44:55", WifiSecurity.GATEWAY))),
+                    NetworkIdentity("home-wired", "家", "gw:192.168.1.1", setOf(AuthorizedAp("a4:11:22:33:44:66", WifiSecurity.GATEWAY)))))))
         c.link.value = DesktopLink("en6", "192.168.5.20", "192.168.5.1", "a4:11:22:33:44:55")
         c.updater.state.value = UpdateState.Available(Update(Release("0.8.1-preview", "- 修复名额条顺序\n- 新增检查更新", Updates.PAGE, emptyList()),
             ReleaseAsset("FuckPo0JiXian-Desktop-0.8.1-preview-macos-arm64.dmg", Updates.PAGE, 1)))
@@ -68,6 +69,24 @@ class ScreenshotTest {
                 scene.render(); scene.render(1_000_000_000)
                 val file = "${look.name.lowercase()}-$name${if (dark) "-dark" else ""}.png"
                 Files.write(out.resolve(file), scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+            }
+        }
+        // A slot bound to two routers (Wi-Fi and wired at home), with the whole detail pane in view.
+        ImageComposeScene(880 * 2, 1180 * 2, Density(2f)) {
+            CompositionLocalProvider(LocalTheme provides desktopTheme(Look.MAC, false)) { App(c, Page.SLOTS, 0) }
+        }.use { scene ->
+            scene.render(); scene.render(1_000_000_000)
+            Files.write(out.resolve("mac-slots-networks.png"), scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        }
+        // The dialog offered when the window comes back into view.
+        c.updater.offer.value = (c.updater.state.value as UpdateState.Available).update
+        for (look in Look.entries) for (dark in listOf(false, true)) {
+            ImageComposeScene(880 * 2, 600 * 2, Density(2f)) {
+                CompositionLocalProvider(LocalTheme provides desktopTheme(look, dark)) { App(c, Page.OVERVIEW, null) }
+            }.use { scene ->
+                scene.render(); scene.render(1_000_000_000)
+                Files.write(out.resolve("${look.name.lowercase()}-update${if (dark) "-dark" else ""}.png"),
+                    scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
             }
         }
     }

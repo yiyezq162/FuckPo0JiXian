@@ -35,6 +35,8 @@ fun statusText(code: String): String = when (code) {
     "CONFIG_QUERY_FIRST" -> "请先检查连接，再保存授权"
     "CONFIG_MOBILE_LIMIT" -> "每台手机只能有一个自动移动槽"
     "REBIND_REQUIRED" -> "Wi-Fi 名称已变化，请重新绑定"
+    "NETWORK_BOUND_ELSEWHERE" -> "这个网络已绑定在其他槽位，请先在那里移除"
+    "NETWORK_LIMIT" -> "一个槽位最多绑定 ${LayoutRules.MAX_NETWORKS} 个网络"
     "ACCOUNT_MISMATCH" -> "账户信息不一致，已停止操作"
     "DEMO_SCENARIO_0" -> "演示：住宅"
     "DEMO_SCENARIO_1" -> "演示：住宅重新拨号"

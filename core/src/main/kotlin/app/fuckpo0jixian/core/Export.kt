@@ -63,7 +63,7 @@ object ShareExport {
     const val NOTE = "本机的槽位分工，供自己的其他设备导入。不含 Token；包含 IP 段（/24）、设备名、Wi-Fi 名称与接入点，请勿公开发布。"
 
     fun build(s: State, platform: String, appVersion: String, now: Long): String = pretty.encodeToString(JsonObject.serializer(), buildJsonObject {
-        put("format", FORMAT); put("version", 2); put("note", NOTE)
+        put("format", FORMAT); put("version", 3); put("note", NOTE)
         put("exportedAt", time(now))
         putJsonObject("device") { put("name", s.deviceName); put("platform", platform); put("app", appVersion) }
         s.snapshot?.let { snap -> putJsonObject("whitelist") {
@@ -77,10 +77,10 @@ object ShareExport {
             put("owner", slot.owner); put("shared", slot.shared); put("automatic", slot.automatic)
             put("allowUnknownWifi", slot.allowUnknownWifi); put("authorized", slot.authorized); put("temporaryHold", slot.temporaryHold)
             put("status", slot.status); put("baseline", slot.baseline?.value); put("changedAt", time(slot.changedAt))
-            identities.find { it.id == slot.identityId }?.let { n -> putJsonObject("network") {
+            putJsonArray("networks") { slot.identityIds.mapNotNull { id -> identities.find { it.id == id } }.forEach { n -> add(buildJsonObject {
                 put("name", n.name); put("ssid", n.ssid)
                 putJsonArray("aps") { n.aps.sortedBy { it.bssid }.forEach { a -> add(buildJsonObject { put("bssid", a.bssid); put("security", a.security.name) }) } }
-            } }
+            }) } }
         }) } }
         putJsonArray("networks") { NetworkHistory.summarize(s.observations, now).take(20).forEach { n -> add(buildJsonObject {
             put("cidr", n.cidr.value); put("days", n.days); put("visits", n.visits); put("common", n.common); put("lastSeen", time(n.lastSeen))
@@ -131,7 +131,7 @@ object DebugExport {
                     put("owner", slot.owner); put("shared", slot.shared); put("automatic", slot.automatic)
                     put("allowUnknownWifi", slot.allowUnknownWifi); put("authorized", slot.authorized); put("temporaryHold", slot.temporaryHold)
                     put("status", slot.status); put("baseline", slot.baseline?.value); put("legacyPending", slot.legacyPending?.value)
-                    put("identity", slot.identityId?.let { Redact.tag(it, salt) }); put("changedAt", time(slot.changedAt))
+                    putJsonArray("identities") { slot.identityIds.forEach { add(Redact.tag(it, salt)) } }; put("changedAt", time(slot.changedAt))
                 }) } }
                 putJsonArray("identities") { l.identities.forEach { n -> add(buildJsonObject {
                     put("id", Redact.tag(n.id, salt)); put("name", n.name); put("ssid", Redact.tag(n.ssid, salt))
@@ -211,7 +211,7 @@ object StateDiff {
                 if (was.shared != slot.shared) add("shared=${slot.shared}")
                 if (was.allowUnknownWifi != slot.allowUnknownWifi) add("unknownWifi=${slot.allowUnknownWifi}")
                 if (was.temporaryHold != slot.temporaryHold) add("hold=${slot.temporaryHold}")
-                if (was.identityId != slot.identityId) add(if (slot.identityId == null) "wifi=unbound" else "wifi=bound")
+                if (was.identityIds != slot.identityIds) add(if (slot.bound) "wifi=${slot.identityIds.size} bound" else "wifi=unbound")
                 if (was.baseline != slot.baseline) add("baseline=${slot.baseline?.value}")
                 if (was.status != slot.status) add("status=${slot.status}")
             }
@@ -267,12 +267,12 @@ object PeerImport {
             val base = local ?: ManagedSlot(p.number)
             val next = if (owner != null && p.purpose != SlotPurpose.RESERVED)
                 base.copy(name = p.name.ifBlank { base.name }, purpose = p.purpose, writer = Writer.OTHER_DEVICE, owner = owner,
-                    automatic = false, allowUnknownWifi = false, authorized = false, shared = false, identityId = null)
+                    automatic = false, allowUnknownWifi = false, authorized = false, shared = false, identityIds = emptyList())
             else base.copy(name = base.name.ifBlank { p.name })
             if (next != base) { slots[p.number] = next; changed += p.number }
         }
         if (changed.isEmpty()) return ImportResult(s, changed)
-        val updated = layout.copy(version = layout.version + 1, slots = slots.values.sortedBy { it.number })
+        val updated = layout.copy(version = layout.version + 1, slots = slots.values.sortedBy { it.number }).withoutOrphans()
         LayoutRules.validate(snap, updated)
         return ImportResult(s.copy(layout = updated, lastSuccess = 0), changed.sorted())
     }

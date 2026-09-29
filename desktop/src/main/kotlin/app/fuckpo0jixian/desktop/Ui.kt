@@ -37,6 +37,7 @@ fun desktopText(code: String) = when (code) {
     "IDENTITY_REQUIRED" -> "未绑定网络，可手动更新"
     "IDENTITY_AMBIGUOUS" -> "当前网络匹配多个槽位，请检查绑定"
     "CONFIG_MOBILE_LIMIT" -> "每台设备只能有一个外出跟随槽"
+    "NETWORK_BOUND_ELSEWHERE" -> "这个网络已绑定在其他槽位"
     "OFFLINE" -> "当前没有可用网络"
     else -> statusText(code)
 }
@@ -109,6 +110,7 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
         titleBar?.invoke(Modifier.fillMaxWidth().height(theme.metrics.titleBarInset))
     }
     ManualDialog(c, busy)
+    UpdateDialog(c)
 }
 
 @Composable internal fun PageScroll(title: String, header: @Composable RowScope.() -> Unit = {}, content: @Composable ColumnScope.() -> Unit) {

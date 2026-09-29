@@ -25,6 +25,13 @@ class UpdatesTest {
       {"tag_name":"v0.7.6-preview","draft":false,"body":"","assets":[]}
     ]"""
 
+    @Test fun skippedVersionIsNeverOfferedAgainButANewerOneIs() {
+        fun update(v: String) = Update(Release(v, "", Updates.PAGE, emptyList()), ReleaseAsset("a", Updates.PAGE, 1))
+        assertFalse(Updates.offer(null, null))
+        assertTrue(Updates.offer(update("0.8.9-preview"), null))
+        assertFalse(Updates.offer(update("0.8.9-preview"), "0.8.9-preview"))
+        assertTrue(Updates.offer(update("0.9.0-preview"), "0.8.9-preview"))
+    }
     @Test fun versionsCompareByNumbers() {
         assertTrue(Updates.newer("0.8.0-preview", "0.7.6-preview"))
         assertTrue(Updates.newer("0.10.0-preview", "0.9.9-preview"))

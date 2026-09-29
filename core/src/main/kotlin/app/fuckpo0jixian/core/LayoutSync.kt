@@ -142,7 +142,7 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
             if (permit == null && target.purpose == SlotPurpose.FIXED &&
                 network.wifi?.usable(now(), network.key) != true) return blocked("WIFI_UNAVAILABLE")
             val intent = SlotPending(s.accountContext, s.layout!!.version, target.number,
-                if (permit != null) "MANUAL" else target.purpose.name, occupant, before.current, target.identityId, before, t)
+                if (permit != null) "MANUAL" else target.purpose.name, occupant, before.current, decision.identityId, before, t)
             persist(s.copy(layout = s.layout!!.copy(pending = intent)))
             live()
             postAttempted = true
