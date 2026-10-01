@@ -22,6 +22,9 @@ import java.util.concurrent.TimeUnit;
 public final class Main {
     private static final String PKG = "app.fuckpo0jixian";
     private static final File DIR = new File("/data/adb/modules/fuckpo0jixian_helper");
+    private static final String SOCKET = "fuckpo0jixian.runtime.v1";
+    /** Exit code for "the system restarted under us": service.sh waits for the new boot and starts a fresh helper. */
+    private static final int SYSTEM_RESTARTED = 3;
     private static String epoch = UUID.randomUUID().toString();
     private static long packageStamp;
     private static final long startedMs = SystemClock.elapsedRealtime();
@@ -110,10 +113,14 @@ public final class Main {
     private static long expectedVersion = -1;
     public static void main(String[] args) throws Exception {
         if (android.os.Process.myUid() != 0 || args.length != 0) return;
-        // Kernel releases this lock on exit/crash; no stale PID killing or PID reuse hazard.
+        // Kernel releases this lock on exit/crash. Only a helper proven to be from an earlier boot is ever killed (evictStale).
         RandomAccessFile lockFile = new RandomAccessFile(new File(DIR, "helper.lock"), "rw");
         FileLock lock = lockFile.getChannel().tryLock();
-        if (lock == null) return;
+        if (lock == null) {
+            // Held by a live helper of this boot (a duplicate start: exit quietly), or by one left from before a soft reboot.
+            if (!evictStale()) return;
+            if ((lock = lockFile.getChannel().tryLock()) == null) System.exit(0);
+        }
         certificate = new String(Files.readAllBytes(new File(DIR, "certificate.sha256").toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
         for (String line : Files.readAllLines(new File(DIR, "module.prop").toPath(), java.nio.charset.StandardCharsets.UTF_8))
             if (line.startsWith("versionCode=")) expectedVersion = Long.parseLong(line.substring("versionCode=".length()).trim());
@@ -122,9 +129,26 @@ public final class Main {
         Class<?> at = Class.forName("android.app.ActivityThread");
         Object thread = at.getMethod("systemMain").invoke(null);
         context = (Context) at.getMethod("getSystemContext").invoke(thread);
+        // A soft reboot restarts system_server but not the kernel, and this root process survives it with a dead
+        // context: it then answered every call with UNAVAILABLE and kept the socket, so the next boot's helper could
+        // not start (seen on an OPPO with KernelSU, 4 failed starts). Leave as soon as the system goes away.
+        IBinder system = (IBinder) Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "activity");
+        if (system == null) throw new IllegalStateException("SYSTEM_NOT_READY");
+        system.linkToDeath(() -> {
+            android.util.Log.w("FuckPo0JiXianHelper", "SYSTEM_RESTARTED");
+            Runtime.getRuntime().halt(SYSTEM_RESTARTED);
+        }, 0);
         handler = new Handler(Looper.getMainLooper());
-        LocalServerSocket server = new LocalServerSocket("fuckpo0jixian.runtime.v1");
-        Thread ipc = new Thread(() -> serve(server), "fuckpo0jixian-ipc");
+        LocalServerSocket server;
+        try { server = new LocalServerSocket(SOCKET); }
+        catch (IOException taken) {
+            Integer theirs = holderBoot();
+            if (theirs != null && theirs >= 0 && theirs == bootCount()) System.exit(0); // a live helper of this boot
+            if (!evictStale()) throw taken;
+            server = new LocalServerSocket(SOCKET);
+        }
+        final LocalServerSocket listening = server;
+        Thread ipc = new Thread(() -> serve(listening), "fuckpo0jixian-ipc");
         ipc.setDaemon(true); ipc.start();
         moduleObserver = new FileObserver(DIR.getAbsolutePath(), FileObserver.CREATE | FileObserver.DELETE | FileObserver.DELETE_SELF | FileObserver.MOVED_TO) {
             public void onEvent(int event, String path) { handler.post(Main::lifecycle); }
@@ -174,6 +198,46 @@ public final class Main {
         Looper.loop();
         lock.release(); lockFile.close();
     }
+    /** The boot the helper holding the socket reports, or null when none answers. */
+    private static Integer holderBoot() {
+        try (LocalSocket socket = new LocalSocket()) {
+            socket.connect(new LocalSocketAddress(SOCKET, LocalSocketAddress.Namespace.ABSTRACT));
+            socket.setSoTimeout(2000);
+            if (socket.getPeerCredentials().getUid() != 0) return null;
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+            out.writeUTF("1"); out.writeUTF("DIAGNOSTICS"); out.writeUTF(""); out.writeUTF(""); out.flush();
+            return new JSONObject(new DataInputStream(socket.getInputStream()).readUTF()).optInt("boot", -1);
+        } catch (Exception none) { return null; }
+    }
+
+    /**
+     * Ends a helper left from an earlier boot (it survived a soft reboot, see main), so this one can take over. Only
+     * when it answers with another boot than ours, and only processes running this exact helper class.
+     */
+    private static boolean evictStale() throws InterruptedException {
+        int boot = bootCount();
+        Integer theirs = holderBoot();
+        if (boot < 0 || theirs == null || theirs == boot) return false;
+        int self = android.os.Process.myPid(), killed = 0;
+        File[] entries = new File("/proc").listFiles();
+        if (entries != null) for (File entry : entries) {
+            String name = entry.getName();
+            if (!name.matches("\\d{1,9}") || Integer.parseInt(name) == self) continue;
+            try (FileInputStream in = new FileInputStream(new File(entry, "cmdline"))) {
+                byte[] head = new byte[512];
+                int n = Math.max(0, in.read(head));
+                if (!java.util.Arrays.asList(new String(head, 0, n, java.nio.charset.StandardCharsets.UTF_8).split("\0"))
+                    .contains(Main.class.getName())) continue;
+                android.os.Process.sendSignal(Integer.parseInt(name), android.os.Process.SIGNAL_KILL);
+                killed++;
+            } catch (IOException ignored) { }
+        }
+        if (killed == 0) return false;
+        for (int i = 0; i < 15 && holderBoot() != null; i++) Thread.sleep(200);
+        note("START", "ended a helper left from boot " + theirs);
+        return true;
+    }
+
     /** Picks the network the APK checks from (validated Wi-Fi first) and reacts when it or its addressing moves. */
     private static void evaluate() {
         Network best = null;

@@ -111,10 +111,20 @@ object DesktopNetwork {
 
     private fun gatewayMac(gateway: String, iface: String?): String? {
         val output = if (os == Os.WINDOWS) run("arp", "-a", gateway) else run("arp", "-n", gateway)
-        return parseArp(output, gateway, if (os == Os.WINDOWS) null else iface).also { mac ->
-            arpMiss = if (mac != null) null else output.lines().firstOrNull { it.isNotBlank() }?.trim()?.take(120) ?: "(empty)"
-        }
+        val mac = parseArp(output, gateway, if (os == Os.WINDOWS) null else iface)
+        arpMiss = if (mac != null) null else output.lines().firstOrNull { it.isNotBlank() }?.trim()?.take(120) ?: "(empty)"
+        if (mac != null || os != Os.MAC || iface == null) return mac
+        // macOS answers "-- no entry" to a non-system app's arp even with 本地网络 allowed (seen on the user's Mac and
+        // reproduced with a bare test app). configd still hands out the router's IPv6 advertisement, whose source
+        // link-address is the router's MAC; on a home LAN that is the IPv4 gateway too.
+        return runCatching { parseAdvertisedMac(run("ipconfig", "getsummary", iface)) }.getOrNull()
+            ?.also { arpMiss = "${arpMiss.orEmpty()} · router advertisement" }
     }
+
+    /** The "source link-address option" of the router advertisement in `ipconfig getsummary <iface>`. */
+    internal fun parseAdvertisedMac(output: String): String? =
+        Regex("""(?i)source link-address option \(1\)[^\n]*?:\s*([0-9a-f]{2}(:[0-9a-f]{2}){5})\b""").find(output)?.groupValues?.get(1)
+            ?.lowercase()?.takeUnless { it == "ff:ff:ff:ff:ff:ff" || it == "00:00:00:00:00:00" }
 
     internal fun parseMacRoute(output: String): Pair<String?, String?>? {
         fun field(name: String) = Regex("""^\s*$name:\s*(\S+)""", RegexOption.MULTILINE).find(output)?.groupValues?.get(1)

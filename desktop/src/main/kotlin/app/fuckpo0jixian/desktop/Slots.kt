@@ -287,7 +287,7 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
  * hides other devices' hardware addresses until it may. Offers the switch in System Settings.
  */
 @Composable internal fun RouterUnreadable() {
-    if (os == Os.MAC) SettingRow("无法识别路由器", subtitle = "请在「隐私与安全性 → 本地网络」中允许去他妈的鸡险，然后回到这里绑定",
+    if (os == Os.MAC) SettingRow("无法识别路由器", subtitle = "请在「隐私与安全性 → 本地网络」中允许去他妈的鸡险，重新打开应用后回到这里绑定",
         icon = Glyph.Warning, iconTint = colors.orange) {
         Button("打开设置", {
             runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")) }

@@ -136,6 +136,7 @@ class BoundTransport(private val localIp: String, private val allowTunnel: Boole
         }
         /** The latest requests of this run, IPs kept to /16 like the rest of the redacted export. */
         fun trace(): List<String> = synchronized(trace) { trace.toList() }
+        fun clearTrace() = synchronized(trace) { trace.clear() }
         internal fun maskIps(text: String) = text.replace(Regex("""\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b""")) { "${it.groupValues[1]}.*.*" }
 
         internal fun parse(input: InputStream): HttpReply {

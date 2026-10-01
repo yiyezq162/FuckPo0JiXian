@@ -348,7 +348,7 @@ private val sinceFormat = DateTimeFormatter.ofPattern("yyyy 年 M 月 d 日").wi
         Icon(Glyph.Warning, null, tint = colors.orange, modifier = Modifier.size(20.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("无法识别路由器", style = Type.headline, color = colors.label)
-            Text(if (mac) "请在「系统设置 › 隐私与安全性 › 本地网络」中允许去他妈的鸡险，否则固定槽不会自动更新。"
+            Text(if (mac) "读不到路由器的硬件地址，固定槽不会自动更新。可在「系统设置 › 隐私与安全性 › 本地网络」中允许去他妈的鸡险，再重新打开应用。"
                 else "读不到路由器的硬件地址，固定槽不会自动更新。", style = Type.caption, color = colors.secondary)
         }
         if (mac) Button("打开设置", {
@@ -461,7 +461,7 @@ private val sinceFormat = DateTimeFormatter.ofPattern("yyyy 年 M 月 d 日").wi
             },
             DialogAction("保存为文件") { debug = false; saveText("导出调试信息", "FuckPo0JiXian-调试信息.json", c.debugText(), c) },
             DialogAction("取消") { debug = false }))
-    if (confirm) Alert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。",
+    if (confirm) Alert("清空记录？", { confirm = false }, message = "清空网络历史和事件，同时会清空掉日志信息。不影响设置与白名单。",
         actions = listOf(DialogAction("清空", destructive = true) { c.clearHistory(); confirm = false }, DialogAction("取消") { confirm = false }))
 }
 

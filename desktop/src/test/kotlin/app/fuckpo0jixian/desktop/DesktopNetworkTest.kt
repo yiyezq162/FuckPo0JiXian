@@ -19,6 +19,18 @@ class DesktopNetworkTest {
         assertNull(DesktopNetwork.parseMacRoute("route: writing to routing socket: not in table"))
     }
 
+    @Test fun routerAdvertisementGivesTheRouterMacWhenArpIsHidden() {
+        val summary = """
+            RTADV : <dictionary> {
+              RouterAdvertisement : from fe80::aa9c:6cff:fe92:cffd, length 88, hop limit 64, lifetime 1800s, reachable 0ms, retransmit 0ms, flags 0x0
+            	prefix info option (3), length 32 (4):  2408:8256:680:d8b::/64, flags [ onlink auto ], valid time 86400s, pref. time 86400s
+            	mtu option (5), length 8 (1): 00:00:00:00:05:dc
+            	source link-address option (1), length 8 (1): A8:9c:6c:92:cf:fd
+        """.trimIndent()
+        assertEquals("a8:9c:6c:92:cf:fd", DesktopNetwork.parseAdvertisedMac(summary))
+        assertNull(DesktopNetwork.parseAdvertisedMac("Router : 192.168.5.1\n mtu option (5), length 8 (1): 00:00:00:00:05:dc"))
+    }
+
     @Test fun arpPicksTheGatewayOnTheRightInterfaceAndPadsOctets() {
         val mac = """
             ? (192.168.5.1) at a4:1:22:b:44:5 on en6 ifscope [ethernet]

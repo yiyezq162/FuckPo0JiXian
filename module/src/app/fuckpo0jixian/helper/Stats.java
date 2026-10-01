@@ -71,14 +71,15 @@ final class Stats {
 
     /**
      * Rewrites only the description line of module.prop (Magisk and KernelSU both list modules from it), atomically,
-     * and only when the text changed. Called from the helper's single looper thread.
+     * and only when the file says otherwise: a duplicate service.sh start (KernelSU also runs it at boot-completed)
+     * writes "starting" over a running helper's line, and the next minute's lifecycle puts it back.
+     * Called from the helper's single looper thread.
      */
-    static String written = null;
     static void describe(File moduleDir, String text) {
-        if (text.equals(written)) return;
         File prop = new File(moduleDir, "module.prop");
         try {
             List<String> lines = Files.readAllLines(prop.toPath(), StandardCharsets.UTF_8);
+            if (lines.contains("description=" + text)) return;
             StringBuilder next = new StringBuilder();
             boolean found = false;
             for (String line : lines) {
@@ -91,7 +92,6 @@ final class Stats {
             FileOutputStream out = file.startWrite();
             try { out.write(next.toString().getBytes(StandardCharsets.UTF_8)); file.finishWrite(out); }
             catch (Exception e) { file.failWrite(out); throw e; }
-            written = text;
         } catch (Exception ignored) { }
     }
 }

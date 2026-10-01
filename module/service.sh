@@ -13,6 +13,18 @@ while [ "$attempt" -lt 4 ]; do
   [ "$result" -eq 0 ] && exit 0
   # Disable/uninstall must also stop the supervisor before its next backoff.
   [ -d "$MODDIR" ] && [ ! -e "$MODDIR/disable" ] && [ ! -e "$MODDIR/remove" ] || exit 0
+  if [ "$result" -eq 3 ]; then
+    # The system restarted under the helper (a soft reboot): wait for the new boot, then start fresh, not as a failure.
+    # If this boot's own service.sh got there first, the new helper sees it and exits 0, ending this supervisor.
+    describe "⏳ 系统已重启，等待开机完成后重新启动辅助进程…"
+    sleep 20
+    waited=0
+    # sys.boot_completed can stay 1 across a framework restart; the boot animation is the better sign.
+    while { [ "$(getprop sys.boot_completed)" != "1" ] || [ "$(getprop init.svc.bootanim)" = "running" ]; } && [ "$waited" -lt 60 ]; do
+      sleep 5; waited=$((waited + 1))
+    done
+    continue
+  fi
   attempt=$((attempt + 1))
   describe "⚠️ 辅助进程异常退出，正在第 $attempt 次重试…"
   sleep $((attempt * 15))

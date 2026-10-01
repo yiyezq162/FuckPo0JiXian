@@ -555,7 +555,7 @@ class Controller(private val context: Context) {
         next
     } }
     fun clearToken() = LifeLog.add("USER clearToken").let { edit { val empty = State(paused = true, nextAllowed = it.nextAllowed, serverNotBefore = it.serverDeadline(), nextProbeAllowed = it.nextProbeAllowed, status = "NO_TOKEN", deviceName = it.deviceName, fallbackMinutes = it.fallbackMinutes); store.save(empty); vault.clear(); credentialPresent.value = false; empty } }
-    fun clearHistory() = LifeLog.add("USER clearHistory").let { edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") } }
+    fun clearHistory() = LifeLog.clear().also { LifeLog.add("USER clearHistory") }.let { edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") } }
     private fun demoWifi(): WifiObservation? = when (demoScenario) {
         0, 1 -> WifiObservation("demo", "Example Home", "02:11:22:33:44:01", WifiSecurity.WPA2, System.currentTimeMillis())
         3 -> WifiObservation("demo", "Example Office", "02:11:22:33:44:02", WifiSecurity.WPA3, System.currentTimeMillis())

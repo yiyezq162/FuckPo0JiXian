@@ -186,7 +186,7 @@ internal fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>,
             } finally { working = false }
         }
     }
-    Section(footer = "调试信息包含详细的运行记录，IP 只保留前两段，不含 Token。清空记录不影响设置、白名单和累计次数。") {
+    Section(footer = "调试信息包含详细的运行记录，IP 只保留前两段，不含 Token。清空记录会一并清空日志，不影响设置、白名单和累计次数。") {
         ActionRow("导出调试信息", loading = working) { open = true }
         ActionRow("清空记录", color = Apple.colors.red) { confirm = true }
     }
@@ -194,7 +194,7 @@ internal fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>,
         message = "包含设置、每次检查与网络变化、模块记录等运行细节。IP 只保留前两段，Wi-Fi 名称以标记代替，不含 Token。",
         actions = listOf(AlertAction("分享", preferred = true) { deliver(true) }, AlertAction("复制") { deliver(false) },
             AlertAction("取消") { open = false }))
-    if (confirm) IosAlert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。", actions = listOf(
+    if (confirm) IosAlert("清空记录？", { confirm = false }, message = "清空网络历史和事件，同时会清空掉日志信息。不影响设置与白名单。", actions = listOf(
         AlertAction("取消") { confirm = false },
         AlertAction("清空", destructive = true) { c.clearHistory(); confirm = false }))
 }

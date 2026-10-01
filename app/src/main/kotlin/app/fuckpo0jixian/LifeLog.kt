@@ -49,6 +49,9 @@ object LifeLog {
         }
     }
 
+    /** 清空记录 also empties this log, so the next debug export starts fresh. */
+    fun clear() = synchronized(lock) { if (::file.isInitialized) runCatching { file.writeText("") } }
+
     /** Most recent lines, oldest first. */
     fun recent(limit: Int = LogRetention.MAX_LINES): List<String> = synchronized(lock) {
         if (!::file.isInitialized) return emptyList()

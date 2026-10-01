@@ -35,6 +35,9 @@ class ActivityLog(dir: Path) {
         }
     }
 
+    /** 清空记录 also empties this log, so the next debug export starts fresh. */
+    fun clear() = synchronized(lock) { runCatching { Files.deleteIfExists(file) } }
+
     /** Most recent lines, oldest first. */
     fun recent(limit: Int = LogRetention.MAX_LINES): List<String> = synchronized(lock) {
         LogRetention.keep(runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()), System.currentTimeMillis()).takeLast(limit)

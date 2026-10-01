@@ -312,7 +312,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         vault.clear(); credentialPresent.value = false
         empty
     } }
-    fun clearHistory() = activity.add("USER clearHistory").let { edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") } }
+    fun clearHistory() = activity.clear().also { BoundTransport.clearTrace(); activity.add("USER clearHistory") }.let { edit { it.copy(events = emptyList(), observations = emptyList(), domesticExit = null, probeStatus = "NOT_CHECKED") } }
     fun previewManual(number: Int) {
         if (busy.value || operation?.isActive == true) return
         operation = scope.launch {
