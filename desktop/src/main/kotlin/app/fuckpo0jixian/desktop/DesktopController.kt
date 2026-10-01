@@ -42,6 +42,10 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
     val notify = MutableStateFlow(prefs.notify)
     val updater = Updater(version, store.dir, prefs)
     val activity = ActivityLog(store.dir)
+    /** Lifetime counters for the overview, beside the state file; never pruned, only removed with the data folder. */
+    val tally = store.dir.resolve("tally.json").let { file ->
+        TallyStore({ runCatching { java.nio.file.Files.readString(file) }.getOrNull() }) { writeAtomically(file, it.toByteArray()) }
+    }
     /** Page the tray menu asked the window to show. */
     val requestedPage = MutableStateFlow<Page?>(null)
     /** Set by the app: quits so an installer can replace it. */
@@ -93,6 +97,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             if (current?.key != lastKey || woke) {
                 if (woke) activity.add("WOKE after ${gap / 1000}s")
                 if (current?.key != lastKey) activity.add("NET ${current?.kind ?: "none"} iface=${current?.iface} ip=${current?.localIp} gw=${current?.gatewayIp}")
+                if (current?.key != lastKey && lastKey != null && current?.online == true) tally.update { it.afterNetworkChange(now()) }
                 lastKey = current?.key
                 manualPreview.value = null
                 if (current?.online == true && scheduleEnabled()) {
@@ -160,16 +165,26 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
         }
     }
 
-    /** STUN over pinned UDP first (direct even under a Windows TUN), then ip.3322.net over the pinned direct route. */
+    /**
+     * STUN over pinned UDP first (direct even under a TUN), then ip.3322.net over the pinned route. The HTTPS answer is
+     * shown but never authorizes a write: on a Mac running Clash it once came back through the proxy (a foreign exit
+     * that Po0, asked the same way, agreed with). Only the STUN exit is proof of the direct path.
+     */
     private suspend fun observeExit(l: DesktopLink, now: Long): DomesticExit {
-        withContext(Dispatchers.IO) { stun(l.localIp!!) }?.let { return DomesticExit(it, now, l.key, ProbeSource.STUN) }
+        withContext(Dispatchers.IO) { stun(l.localIp!!) }?.let { stunMissed = false; return DomesticExit(it, now, l.key, ProbeSource.STUN) }
+        if (!stunMissed) { stunMissed = true; activity.add("PROBE stun unanswered on ${l.iface}; exit via https, writes wait for stun") }
         return DomesticProbe.parse(transportFor(l.localIp!!, false).execute("GET", ProbeSource.IP3322.url), now, l.key, ProbeSource.IP3322)
     }
+    @Volatile private var stunMissed = false
+    /** The fresh exit a write may rely on: observed by STUN on this network. */
+    private fun provenExit(key: String) = CheckFlow.freshExit(store.load(), key, now(), policy)
+        ?.takeIf { store.load().domesticExit?.source == ProbeSource.STUN }
 
     suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, fallback: Boolean = false): String {
         val began = now()
         val requests = BoundTransport.requests.get()
         val code = runCheckLocked(manual, observeOnly, fallback)
+        if (!store.load().demo) tally.update { it.afterCheck(code, now()) }
         if (code != "BUSY") activity.add("CHECK ${if (manual) "manual" else "auto"}${if (fallback) "-fallback" else ""}${if (observeOnly) "-read" else ""} " +
             "$code http=${BoundTransport.requests.get() - requests} ${now() - began}ms")
         return code
@@ -198,12 +213,12 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             }
             val platform = Po0Platform(vault::read, transport, endpoint = s.endpoint)
             if (CheckFlow.mayWrite(s, observeOnly, manual, previewSlot != null, permit, now())) {
-                if (CheckFlow.freshExit(store.load(), l.key, now(), policy) == null && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
-                val observed = CheckFlow.freshExit(store.load(), l.key, now(), policy)
+                if (provenExit(l.key) == null && LocalCheck.probeAllowed(store.load(), l.key, now())) updateDomestic(l)
+                val observed = provenExit(l.key)
                 session = session.copy(observedCidr = observed, revalidate = {
                     val again = withContext(Dispatchers.IO) { network() }
                     val exit = observeExit(l, now())
-                    again.key == l.key && exit.cidr == observed
+                    again.key == l.key && exit.source == ProbeSource.STUN && exit.cidr == observed
                 })
             }
             val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
@@ -280,7 +295,8 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
             "autostart" to runCatching { Autostart.enabled() }.getOrNull()?.toString(), "notify" to notify.value.toString())
         val details = mapOf("link" to l?.let { "${it.kind} iface=${it.iface} ip=${it.localIp} gw=${it.gatewayIp} mac=${it.gatewayMac}" },
             "arpMiss" to DesktopNetwork.arpMiss,
-            "busy" to busy.value.toString(), "update" to updater.state.value.label)
+            "busy" to busy.value.toString(), "update" to updater.state.value.label,
+            "tally" to tally.flow.value.let { "updates=${it.ipUpdates} checks=${it.checks} networks=${it.networkChanges} since=${java.time.Instant.ofEpochMilli(it.since)}" })
         return DebugExport.build(store.load(), device, now(), details = details,
             logs = mapOf("activity" to activity.recent(), "requests" to BoundTransport.trace()))
     }

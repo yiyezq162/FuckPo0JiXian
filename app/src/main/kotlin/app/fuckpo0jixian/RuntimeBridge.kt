@@ -16,8 +16,19 @@ import java.io.DataOutputStream
 import java.io.File
 import java.util.UUID
 
+/** The module's lifetime counters (helper 0.9+): confirmed wakes, of which revivals, writes they led to, changes seen. */
+data class ModuleStats(val wakes: Long, val revived: Long, val ipUpdates: Long, val networkChanges: Long, val since: Long) {
+    companion object {
+        fun parse(o: JSONObject?): ModuleStats? = o?.let {
+            ModuleStats(it.optLong("wakes"), it.optLong("revived"), it.optLong("ipUpdates"),
+                it.optLong("networkChanges") + it.optLong("gatewayChanges"), it.optLong("since"))
+        }
+    }
+}
+
 /** What the helper reported about itself at the last handshake (INFO); null fields come from older modules. */
-data class ModuleInfo(val version: Long?, val versionName: String?, val network: String?, val gateway: String?, val wan: String?) {
+data class ModuleInfo(val version: Long?, val versionName: String?, val network: String?, val gateway: String?, val wan: String?,
+                      val stats: ModuleStats? = null) {
     /** Older than this APK: the module release matching this APK has fixes or features it lacks. */
     fun outdated(apkVersion: Long) = version == null || version < apkVersion
 }
@@ -46,6 +57,8 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
     val result = MutableStateFlow(history(receipt, "尚无增强请求完成证据"))
     /** Latest helper self-report; null when no helper answered. */
     val module = MutableStateFlow<ModuleInfo?>(null)
+    /** Whether a helper of this boot answered at the last refresh; null before the first one. */
+    val alive = MutableStateFlow<Boolean?>(null)
     val apkVersion: Long = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode }.getOrDefault(0)
     private val eventPrefs = context.getSharedPreferences("module_events", Context.MODE_PRIVATE)
     val lastConnection = MutableStateFlow(history(observation, "本次开机尚无已验证的 helper 报告"))
@@ -86,10 +99,11 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
         module.value = info?.let {
             ModuleInfo(it.optLong("version", -1).takeIf { v -> v >= 0 }, it.optString("versionName").ifBlank { null },
                 it.optString("network").ifBlank { null }, it.optString("gateway").ifBlank { null },
-                it.optString("wan").takeIf { w -> w.isNotBlank() && w != "null" })
+                it.optString("wan").takeIf { w -> w.isNotBlank() && w != "null" }, ModuleStats.parse(it.optJSONObject("stats")))
         }
         if (info != null) pullEvents(info)
         val sameBoot = info != null && bootCount >= 0 && info.optInt("boot", -1) == bootCount
+        alive.value = sameBoot
         val reply = if (info == null) exchange("STATUS") else if (!sameBoot) "BOOT_UNKNOWN" else info.optString("status")
         val seenThisBoot = bootCount >= 0 && runCatching {
             JSONObject(observation.openRead().bufferedReader().use { it.readText() }).optInt("boot", -1) == bootCount
@@ -123,6 +137,9 @@ class RuntimeBridge(private val context: Context, private val bootCount: Int = r
         }
         eventPrefs.edit().putString("origin", origin).putLong("seq", reply.optLong("seq", since)).apply()
     }
+
+    /** Tells the helper how the check it woke ended, so its counters (and the manager's description) stay true. */
+    suspend fun report(ticket: String, code: String) { exchange("RESULT", "$ticket:$code") }
 
     suspend fun claim(ticket: String): String? = exchange("CLAIM", ticket)?.takeIf {
         it.matches(Regex("CHECK:[a-f0-9-]{36}"))

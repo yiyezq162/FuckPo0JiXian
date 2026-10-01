@@ -3,6 +3,7 @@ package app.fuckpo0jixian
 import android.net.Network
 import app.fuckpo0jixian.core.*
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.Proxy
 import java.net.URL
 import java.io.ByteArrayOutputStream
@@ -12,10 +13,18 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class NetworkTransport(private val network: Network) : Transport {
-    override suspend fun execute(method: String, url: String): HttpReply = suspendCancellableCoroutine { continuation ->
+    /**
+     * The socket timeouts do not cover everything (name lookup, a stalled TLS handshake), and a device log once showed a
+     * single check waiting 16 minutes. Past [LIMIT_MS] the request counts as a network error, never as a cancellation.
+     */
+    override suspend fun execute(method: String, url: String): HttpReply =
+        withTimeoutOrNull(LIMIT_MS) { request(method, url) } ?: throw ApiFailure("NETWORK_TLS_OR_RESPONSE_ERROR")
+
+    private suspend fun request(method: String, url: String): HttpReply = suspendCancellableCoroutine { continuation ->
         var connection: HttpsURLConnection? = null
         val lock = Any()
-        continuation.invokeOnCancellation { executor.execute { synchronized(lock) { connection?.disconnect() } } }
+        // Not on [executor]: its threads may be the ones stuck, which is exactly when this must still run.
+        continuation.invokeOnCancellation { Thread { synchronized(lock) { connection?.disconnect() } }.start() }
         executor.execute {
             try {
                 // Bound to the physical network and never proxied: a VPN / TUN or system proxy cannot carry it.
@@ -48,7 +57,8 @@ class NetworkTransport(private val network: Network) : Transport {
         }
     }
     companion object {
-        private val executor = Executors.newFixedThreadPool(2)
+        private val executor = Executors.newFixedThreadPool(4)
+        private const val LIMIT_MS = 35_000L
         val requests = java.util.concurrent.atomic.AtomicLong()
     }
 }

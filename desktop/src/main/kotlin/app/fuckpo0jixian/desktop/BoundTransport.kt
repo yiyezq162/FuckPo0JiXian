@@ -120,7 +120,11 @@ class BoundTransport(private val localIp: String, private val allowTunnel: Boole
         private val dohServers = listOf("223.5.5.5", "1.12.12.12")
         private val udpServers = listOf("223.5.5.5", "119.29.29.29")
         private val resolved = java.util.concurrent.ConcurrentHashMap<String, Resolved>()
-        private const val TUNNEL_MEMORY_MS = 600_000L
+        /**
+         * How long a stalled direct route is remembered. Longer than the hourly Po0 refresh: with 10 minutes, every
+         * hourly check on a TUN network paid the 10 s timeout again (seen in a Windows log).
+         */
+        private const val TUNNEL_MEMORY_MS = 6 * 3_600_000L
         private val tunnelPreferred = java.util.concurrent.ConcurrentHashMap<String, Long>()
         private val trace = ArrayDeque<String>()
 

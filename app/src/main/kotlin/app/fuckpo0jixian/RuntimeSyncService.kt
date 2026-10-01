@@ -74,6 +74,7 @@ class RuntimeSyncService : Service() {
                     val complete = controller.store.load().lastSuccess > before && NetworkTransport.requests.get() > requests &&
                         code in setOf("PRESENT_CURRENT_CHECK", "OBSERVED_MISSING")
                     if (readOnly && complete) controller.runtime.validate(epoch)
+                    runCatching { controller.runtime.report(ticket, code) }
                     controller.runtime.record("$code · HTTP尝试 ${NetworkTransport.requests.get() - requests}", SystemClock.elapsedRealtime() - begin,
                         complete, readOnly)
                 }

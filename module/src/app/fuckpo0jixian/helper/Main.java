@@ -64,6 +64,10 @@ public final class Main {
     private static ConnectivityManager cm;
     private static final java.util.Set<Network> physical = new java.util.HashSet<>();
     private static String observed = "", primaryKind = "none";
+    private static Stats stats;
+    /** The last ticket the APK claimed, and whether the APK was running before that wake; its RESULT is counted once. */
+    private static String claimed = "";
+    private static boolean pendingRevived, ticketRevived;
 
     // In-memory timeline for the APK's debug log: never written to disk, gone with the process.
     private static final java.util.ArrayDeque<String> timeline = new java.util.ArrayDeque<>();
@@ -126,10 +130,12 @@ public final class Main {
             public void onEvent(int event, String path) { handler.post(Main::lifecycle); }
         };
         moduleObserver.startWatching();
+        stats = Stats.load(); stats.save();
         note("START", "helper " + versionName + " boot=" + bootCount());
         gateway = new Gateway(new Gateway.Listener() {
             public void changed(String wan, String previous, String method) {
                 note("GATEWAY", "wan " + previous + " -> " + wan + " via " + method);
+                synchronized (Main.class) { stats.gatewayChanges++; stats.save(); }
                 handler.post(() -> { handler.removeCallbacks(gatewayWake); handler.post(gatewayWake); });
             }
             public void note(String kind, String detail) { Main.note(kind, detail); }
@@ -208,7 +214,10 @@ public final class Main {
         gateway.watch(wifi && validated ? best : null, wifi && validated ? router : null);
         String key = best + ":" + kind + ":" + validated + ":" + v4 + ":" + v6;
         if (key.equals(observed)) return;
+        // The first evaluation after start is where we are, not a change.
+        boolean change = !observed.isEmpty() && best != null && validated;
         observed = key; primaryKind = kind;
+        if (change) synchronized (Main.class) { stats.networkChanges++; stats.save(); describe(lastStatus); }
         note("NET", kind + (best == null ? "" : " validated=" + validated + " v4=" + v4 + " v6=" + v6 +
             (router != null ? " gw=" + router.getHostAddress() : "")));
         if (best != null && validated) { handler.removeCallbacks(wake); handler.postDelayed(wake, 500); }
@@ -310,6 +319,7 @@ public final class Main {
                 output.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)); report.finishWrite(output);
             } catch (Exception ignored) { if (output != null) report.failWrite(output); }
         }
+        describe(s);
         if (s.equals("DISABLED")) { android.os.Process.killProcess(android.os.Process.myPid()); return; }
         if (configObserver == null && !s.equals("LOCKED")) {
             try {
@@ -343,6 +353,7 @@ public final class Main {
             return;
         }
         lastWake = now; issued = now; ticket = UUID.randomUUID().toString();
+        pendingRevived = !appRunning();
         final String pending = ticket;
         // Some OEMs reject an otherwise valid start while am still exits normally.
         // Only the APK claiming this one-use ticket confirms entry. This one-shot
@@ -366,6 +377,30 @@ public final class Main {
             else note("WAKE", kind + " sent");
         } catch (Exception e) { wakeFailed = true; note("WAKE", kind + " failed " + e.getClass().getSimpleName()); }
     }
+    /** The manager's module list shows this; READY with a failed wake reads as a warning. */
+    private static void describe(String status) {
+        if (stats == null) return;
+        Stats.describe(DIR, stats.description(status.equals("READY") && wakeFailed ? "START_FAILED" : status));
+    }
+
+    /** Whether the APK's main process exists right now (root reads every process's command line). */
+    private static boolean appRunning() {
+        File[] entries = new File("/proc").listFiles();
+        if (entries == null) return true; // Unknown: never claim a revival we did not see.
+        byte[] want = PKG.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (File entry : entries) {
+            String name = entry.getName();
+            if (name.isEmpty() || !Character.isDigit(name.charAt(0))) continue;
+            try (FileInputStream in = new FileInputStream(new File(entry, "cmdline"))) {
+                byte[] head = new byte[want.length + 1];
+                int n = in.read(head);
+                if (n >= want.length && (n == want.length || head[want.length] == 0) &&
+                    java.util.Arrays.equals(java.util.Arrays.copyOf(head, want.length), want)) return true;
+            } catch (IOException ignored) { }
+        }
+        return false;
+    }
+
     private static void serve(LocalServerSocket server) {
         while (true) try (LocalSocket socket = server.accept()) {
             socket.setSoTimeout(1500);
@@ -385,13 +420,29 @@ public final class Main {
                     reply = new JSONObject().put("boot", boot).put("startedMs", startedMs)
                         .put("status", s.equals("READY") ? (wakeFailed ? "START_FAILED" : "READY:" + epoch) : s)
                         .put("version", expectedVersion).put("versionName", versionName)
-                        .put("network", primaryKind).put("gateway", gateway.status()).put("wan", gateway.wan()).toString();
+                        .put("network", primaryKind).put("gateway", gateway.status()).put("wan", gateway.wan())
+                        .put("stats", stats.json()).toString();
                 }
                 else if (action.equals("STATUS")) reply = s.equals("READY") ? (wakeFailed ? "START_FAILED" : "READY:" + epoch) : s;
                 else if (!client.equals(instance)) reply = "IDENTITY";
                 else if (action.equals("EVENTS")) reply = events(claim.matches("\\d{1,18}") ? Long.parseLong(claim) : 0);
                 else if (action.equals("CLAIM") && s.equals("READY") && !ticket.isEmpty() && ticket.equals(claim) &&
-                    SystemClock.elapsedRealtime() - issued < 30_000) { reply = "CHECK:" + epoch; ticket = ""; wakeFailed = false; note("CLAIM", "APK entered"); }
+                    SystemClock.elapsedRealtime() - issued < 30_000) {
+                    reply = "CHECK:" + epoch; claimed = ticket; ticketRevived = pendingRevived; ticket = ""; wakeFailed = false;
+                    stats.wakes++; if (ticketRevived) stats.revived++; stats.save();
+                    note("CLAIM", "APK entered" + (ticketRevived ? " (was not running)" : ""));
+                    handler.post(() -> describe(lastStatus));
+                }
+                // After a module wake the APK reports how its check ended ("<ticket>:<code>"), once per claimed ticket.
+                else if (action.equals("RESULT") && !claimed.isEmpty() && claim.startsWith(claimed + ":")) {
+                    String code = claim.substring(claimed.length() + 1);
+                    claimed = "";
+                    if (code.equals("SLOT_UPDATED") || code.equals("RECOVERED_VERIFIED")) {
+                        stats.ipUpdates++; stats.save(); handler.post(() -> describe(lastStatus));
+                    }
+                    note("RESULT", code.matches("[A-Z0-9_]{1,64}") ? code : "?");
+                    reply = "OK";
+                }
                 else reply = "REJECTED";
             }
             DataOutputStream output = new DataOutputStream(socket.getOutputStream());

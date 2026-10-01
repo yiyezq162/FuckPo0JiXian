@@ -99,13 +99,18 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
             .padding(start = if (mac) 20.dp else 28.dp, top = theme.metrics.titleBarInset + if (mac) 8.dp else 24.dp, bottom = 20.dp, end = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(Page.SLOTS.title, style = Type.pageTitle, color = colors.label)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Card(padding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)) {
+                Text("名额", style = Type.caption.copy(fontWeight = FontWeight.Medium), color = colors.secondary)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text("已用 ${snap.entries.size} / ${snap.capacity}", style = Type.headline, color = colors.label)
+                    Text("${snap.entries.size} / ${snap.capacity}", style = Type.pageTitle.copy(fontSize = Type.pageTitle.fontSize * 1.15f,
+                        fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"), color = colors.label)
                     Spacer(Modifier.weight(1f))
-                    Text("剩余 ${snap.remaining}", style = Type.caption, color = colors.secondary)
+                    Text("剩余 ${snap.remaining}", style = Type.caption, color = if (snap.remaining == 0) colors.orange else colors.secondary,
+                        modifier = Modifier.padding(bottom = 4.dp))
                 }
-                CapacityCells(s, snap)
+                Spacer(Modifier.height(10.dp))
+                CapacityCells(s, snap, height = 8.dp)
+                Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     listOf(SlotPurpose.FIXED, SlotPurpose.MOBILE, SlotPurpose.RESERVED).forEach { p ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -175,9 +180,9 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
             .padding(top = theme.metrics.titleBarInset + if (mac) 8.dp else 24.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             // Header: identity of the slot and who owns it, then the only two actions that matter here.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Badge("${original.number + 1}", purposeColor(purpose), size = 40.dp)
+                Badge("${original.number + 1}", purposeColor(purpose), size = 52.dp)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(name.ifBlank { "槽 ${original.number + 1}" }, style = Type.title, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(name.ifBlank { "槽 ${original.number + 1}" }, style = Type.pageTitle, color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(remote?.value ?: "空槽", style = Type.numeric, color = colors.secondary)
                         ManagerTags(original)

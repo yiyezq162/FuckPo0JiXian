@@ -57,6 +57,7 @@ class ScreenshotTest {
                 identities = listOf(NetworkIdentity("home", "家", "gw:192.168.5.1", setOf(AuthorizedAp("a4:11:22:33:44:55", WifiSecurity.GATEWAY))),
                     NetworkIdentity("home-wired", "家", "gw:192.168.1.1", setOf(AuthorizedAp("a4:11:22:33:44:66", WifiSecurity.GATEWAY)))))))
         c.link.value = DesktopLink("en6", "192.168.5.20", "192.168.5.1", "a4:11:22:33:44:55")
+        c.tally.update { Tally(ipUpdates = 12, checks = 3_904, networkChanges = 58, since = now - 21L * 86_400_000, lastUpdate = now - 5_400_000) }
         c.updater.state.value = UpdateState.Available(Update(Release("0.8.1-preview", "- 修复名额条顺序\n- 新增检查更新", Updates.PAGE, emptyList()),
             ReleaseAsset("FuckPo0JiXian-Desktop-0.8.1-preview-macos-arm64.dmg", Updates.PAGE, 1)))
         val out = Paths.get("build", "screenshots").also { Files.createDirectories(it) }
@@ -71,6 +72,15 @@ class ScreenshotTest {
                 Files.write(out.resolve(file), scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
             }
         }
+        // macOS without the Local Network permission: the router cannot be identified.
+        c.link.value = DesktopLink("en6", "192.168.5.20", "192.168.5.1", null)
+        ImageComposeScene(880 * 2, 600 * 2, Density(2f)) {
+            CompositionLocalProvider(LocalTheme provides desktopTheme(Look.MAC, false)) { App(c, Page.OVERVIEW, null) }
+        }.use { scene ->
+            scene.render(); scene.render(1_000_000_000)
+            Files.write(out.resolve("mac-overview-unidentified.png"), scene.render(2_000_000_000).encodeToData(EncodedImageFormat.PNG)!!.bytes)
+        }
+        c.link.value = DesktopLink("en6", "192.168.5.20", "192.168.5.1", "a4:11:22:33:44:55")
         // A slot bound to two routers (Wi-Fi and wired at home), with the whole detail pane in view.
         ImageComposeScene(880 * 2, 1180 * 2, Density(2f)) {
             CompositionLocalProvider(LocalTheme provides desktopTheme(Look.MAC, false)) { App(c, Page.SLOTS, 0) }

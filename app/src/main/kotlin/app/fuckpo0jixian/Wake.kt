@@ -21,8 +21,10 @@ import android.os.SystemClock
 object Wake {
     const val ACTION_NETWORK = "app.fuckpo0jixian.WAKE_NETWORK"
     const val ACTION_FALLBACK = "app.fuckpo0jixian.WAKE_FALLBACK"
-    private fun operation(context: Context, action: String) = PendingIntent.getBroadcast(context, action.hashCode(),
-        Intent(context, WakeReceiver::class.java).setAction(action), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    const val EXTRA_DUE = "due"
+    private fun operation(context: Context, action: String, due: Long = 0) = PendingIntent.getBroadcast(context, action.hashCode(),
+        Intent(context, WakeReceiver::class.java).setAction(action).apply { if (due > 0) putExtra(EXTRA_DUE, due) },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     /**
      * PendingIntent network requests are one-shot: the system sends the intent once a matching network is
@@ -56,11 +58,10 @@ object Wake {
 
 
     fun scheduleFallback(context: Context, delayMs: Long) {
-        // Wall-clock target, so the log can show how late the system delivered it.
-        context.getSharedPreferences("lifecycle", Context.MODE_PRIVATE).edit()
-            .putLong("fallback_due", System.currentTimeMillis() + delayMs).apply()
+        // Wall-clock target, so the log can show how late the system delivered it. It travels in the intent: a process
+        // started by this alarm re-arms the next one before the receiver runs, so a stored value would already be new.
         context.getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + delayMs, operation(context, ACTION_FALLBACK))
+            SystemClock.elapsedRealtime() + delayMs, operation(context, ACTION_FALLBACK, System.currentTimeMillis() + delayMs))
     }
 
     fun disable(context: Context) {
@@ -74,7 +75,7 @@ class WakeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val controller = (context.applicationContext as FuckPo0JiXianApp).controller
         LifeLog.add("WAKE " + when (intent.action) {
-            Wake.ACTION_FALLBACK -> "fallback late=" + context.getSharedPreferences("lifecycle", Context.MODE_PRIVATE).getLong("fallback_due", 0)
+            Wake.ACTION_FALLBACK -> "fallback late=" + intent.getLongExtra(Wake.EXTRA_DUE, 0)
                 .takeIf { it > 0 }?.let { "${(System.currentTimeMillis() - it) / 1000}s" }
             Wake.ACTION_NETWORK -> "network"; Intent.ACTION_BOOT_COMPLETED -> "boot"; Intent.ACTION_MY_PACKAGE_REPLACED -> "updated"
             else -> intent.action

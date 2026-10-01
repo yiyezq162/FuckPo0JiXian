@@ -212,8 +212,10 @@ enum class ButtonKind { PRIMARY, SECONDARY, SUBTLE, DESTRUCTIVE }
 }
 
 @Composable fun Badge(label: String, tint: Color, size: Dp = 26.dp) {
-    Box(Modifier.size(size).clip(RoundedCornerShape(if (theme.look == Look.MAC) 7.dp else 5.dp)).background(tint), contentAlignment = Alignment.Center) {
-        Text(label, style = Type.headline, color = Color.White)
+    // Corners and figure grow with the badge, so a large one (a slot's header) keeps the small one's proportions.
+    val scale = size / 26.dp
+    Box(Modifier.size(size).clip(RoundedCornerShape((if (theme.look == Look.MAC) 7.dp else 5.dp) * scale)).background(tint), contentAlignment = Alignment.Center) {
+        Text(label, style = Type.headline.copy(fontSize = Type.headline.fontSize * (if (scale > 1.4f) scale * 0.8f else 1f)), color = Color.White)
     }
 }
 

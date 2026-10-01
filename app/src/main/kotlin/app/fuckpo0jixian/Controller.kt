@@ -37,6 +37,14 @@ class Controller(private val context: Context) {
     val currentNetworkKey = MutableStateFlow<String?>(null)
     val wifiObservation = MutableStateFlow<WifiObservation?>(null)
     val manualPreview = MutableStateFlow<ManualPermit?>(null)
+    /** Lifetime counters for the overview; survive until the app or its data is removed. */
+    val tally = run {
+        val file = android.util.AtomicFile(java.io.File(context.noBackupFilesDir, "tally-v1.json"))
+        TallyStore({ runCatching { file.openRead().bufferedReader().use { it.readText() } }.getOrNull() }) { text ->
+            val out = file.startWrite()
+            try { out.write(text.toByteArray()); file.finishWrite(out) } catch (e: Exception) { file.failWrite(out); throw e }
+        }
+    }
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     // Android net IDs may be reused after reboot. Never reuse a prior boot's success cache.
     private val bootEpoch = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT).toString() }
@@ -50,6 +58,7 @@ class Controller(private val context: Context) {
     @Volatile private var requestJob: Job? = null
     private var networkId: String? = null
     private var lastNetLine: String? = null
+    private var lastCountedNetwork: String? = null
     private var knownIdentity: WifiObservation? = null
     private val stability = Debouncer(policy.debounceMs)
     private var demo = SlotDemoPlatform()
@@ -57,9 +66,12 @@ class Controller(private val context: Context) {
     private var previewSlot: Int? = null
     /**
      * Networks where STUN got no answer (UDP blocked) or disagreed with what Po0 sees (a carrier NAT mapping UDP
-     * elsewhere): the exit is asked over HTTPS there, without waiting for STUN again.
+     * elsewhere), and when: the exit is asked over HTTPS there for a while, without waiting for STUN again. Only for a
+     * while, and not after HTTPS failed too: one unanswered STUN during Doze once left a phone on a failing HTTPS
+     * probe for a whole night, unable to verify its exit (seen in a device log).
      */
-    private val httpsOnly = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val httpsOnly = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private fun stunSkipped(key: String) = httpsOnly[key]?.let { SystemClock.elapsedRealtime() - it < HTTPS_ONLY_MS } == true
     /** The best non-VPN network, reported on Android 12+ whatever VPN is the default. */
     @Volatile private var underlying: Network? = null
     /**
@@ -168,6 +180,12 @@ class Controller(private val context: Context) {
         val net = "NET $type vpn=${cm.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true} " +
             "addrs=${localAddresses(n) ?: "-"} wifi=${Redact.tag(identity?.ssid, salt) ?: "-"}/${Redact.tag(identity?.bssid, salt) ?: "-"}"
         if (net != lastNetLine) { lastNetLine = net; LifeLog.add(net) }
+        // Counted by network and addressing only: the Wi-Fi name briefly going missing is not a change.
+        val counted = n?.let { "${networkKey(it)}:${localAddresses(it)}" }
+        if (counted != null && counted != lastCountedNetwork) {
+            if (lastCountedNetwork != null) tally.update { it.afterNetworkChange(System.currentTimeMillis()) }
+            lastCountedNetwork = counted
+        }
         manualPreview.value = null
         networkId = id
         operation?.cancel()
@@ -299,12 +317,13 @@ class Controller(private val context: Context) {
      */
     private suspend fun observeExit(network: Network, now: Long = System.currentTimeMillis()): DomesticExit = withContext(Dispatchers.IO) {
         val key = networkKey(network)!!
-        if (key !in httpsOnly) {
-            Stun.query(network)?.let { return@withContext DomesticExit(it, now, key, ProbeSource.STUN) }
-            httpsOnly.add(key); LifeLog.add("PROBE stun unanswered; https on this network")
+        if (!stunSkipped(key)) {
+            Stun.query(network)?.let { httpsOnly.remove(key); return@withContext DomesticExit(it, now, key, ProbeSource.STUN) }
+            httpsOnly[key] = SystemClock.elapsedRealtime(); LifeLog.add("PROBE stun unanswered; https on this network for now")
         }
         val source = ProbeSource.IP3322
-        DomesticProbe.parse(NetworkTransport(network).execute("GET", source.url), now, key, source)
+        try { DomesticProbe.parse(NetworkTransport(network).execute("GET", source.url), now, key, source) }
+        catch (e: Exception) { httpsOnly.remove(key); throw e } // Neither path works: try STUN first again next time.
     }
     suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, enhanced: Boolean = false,
                          fallback: Boolean = false): String = withContext(Dispatchers.Main.immediate) {
@@ -320,6 +339,7 @@ class Controller(private val context: Context) {
         android.util.Log.i("FuckPo0JiXianCheck", "uid=${android.os.Process.myUid()} mode=$selected path=$path " +
             "beginMs=$began endMs=${SystemClock.elapsedRealtime()} httpAttempts=$count result=$safeCode")
         if (result != "BUSY") LifeLog.add("CHECK $path $safeCode http=$count ${SystemClock.elapsedRealtime() - began}ms")
+        if (!store.load().demo) tally.update { it.afterCheck(result, System.currentTimeMillis()) }
         // The network has settled by now: arm the one-shot wake for the next change and restart the fallback clock.
         if (result != "BUSY" && result != "CANCELLED_NETWORK_OR_SETTINGS" && scheduleEnabled()) Wake.enable(context, fallbackMs())
         result
@@ -384,7 +404,7 @@ class Controller(private val context: Context) {
             val exit = after.domesticExit
             val seen = after.snapshot?.current
             if (!s.demo && exit?.source == ProbeSource.STUN && exit.networkKey == session.key && after.networkKey == session.key &&
-                seen != null && exit.cidr != seen && httpsOnly.add(session.key)) {
+                seen != null && exit.cidr != seen && httpsOnly.put(session.key, SystemClock.elapsedRealtime()) == null) {
                 LifeLog.add("PROBE stun ${exit.ipv4} disagrees with Po0 ${seen.value}; https on this network")
                 scheduleCheck("catch-up")
             }
@@ -465,7 +485,9 @@ class Controller(private val context: Context) {
             "runtimeStatus" to runtime.status.value, "runtimeConnection" to runtime.lastConnection.value, "runtimeResult" to runtime.result.value,
             "moduleVersion" to module?.let { "${it.versionName} (${it.version})" }, "moduleNetwork" to module?.network,
             "moduleGateway" to module?.gateway, "routerWan" to module?.wan,
-            "update" to updater.state.value.label, "lastExit" to LifeLog.lastExit()?.let { "${java.time.Instant.ofEpochMilli(it.first)} ${it.second}" })
+            "update" to updater.state.value.label, "lastExit" to LifeLog.lastExit()?.let { "${java.time.Instant.ofEpochMilli(it.first)} ${it.second}" },
+            "tally" to tally.flow.value.let { "updates=${it.ipUpdates} checks=${it.checks} networks=${it.networkChanges} since=${java.time.Instant.ofEpochMilli(it.since)}" },
+            "moduleStats" to module?.stats?.let { "wakes=${it.wakes} revived=${it.revived} updates=${it.ipUpdates} networks=${it.networkChanges}" })
         return DebugExport.build(s, device, System.currentTimeMillis(), logs = mapOf("lifecycle" to LifeLog.recent()), details = details)
     }
     fun refreshRuntime() { scope.launch { runtime.refresh(store.load()) } }
@@ -565,6 +587,10 @@ class Controller(private val context: Context) {
         if (demoScenario == 6) demo.entries = demo.entries.map { e -> if (e.slot == 0) Entry(Cidr("198.51.98.0/24"), 0) else e }
         wifiObservation.value = demoWifi()
         it.copy(lastSuccess = 0, status = "DEMO_SCENARIO_$demoScenario")
+    }
+    private companion object {
+        /** How long a network stays on the HTTPS exit probe after STUN went unanswered there. */
+        const val HTTPS_ONLY_MS = 30 * 60_000L
     }
     private fun notifyIssue(code: String) {
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return

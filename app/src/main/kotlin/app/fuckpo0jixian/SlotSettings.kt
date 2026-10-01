@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
@@ -85,20 +86,54 @@ internal fun wifiIdentityText(s: State, wifi: WifiObservation?): String? {
     val used = cells.filterNotNull()
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
-            Text("已用 ${snap.entries.size} / ${snap.capacity}", style = Apple.title, color = colors.label)
+            Text("已用 ${snap.entries.size} / ${snap.capacity}", style = Apple.title.copy(fontWeight = FontWeight.Bold, fontFeatureSettings = "tnum"), color = colors.label)
             Spacer(Modifier.weight(1f))
             Text("剩余 ${snap.remaining}", style = Apple.subhead, color = colors.secondary)
         }
-        Row(Modifier.fillMaxWidth().height(8.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.fillMaxWidth().height(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             cells.forEach { cell ->
                 Box(Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(cell?.let { purposeColor(it) } ?: colors.fill))
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            listOf(SlotPurpose.FIXED to "固定", SlotPurpose.MOBILE to "移动", SlotPurpose.RESERVED to "其他").filter { it.first in used }.forEach { (p, label) ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Dot(purposeColor(p)); Text(label, style = Apple.footnote, color = colors.secondary)
+        Legend(used)
+    }
+}
+
+@Composable private fun Legend(used: List<SlotPurpose>) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        listOf(SlotPurpose.FIXED to "固定", SlotPurpose.MOBILE to "移动", SlotPurpose.RESERVED to "其他").filter { it.first in used }.forEach { (p, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Dot(purposeColor(p)); Text(label, style = Apple.footnote, color = Apple.colors.secondary)
+            }
+        }
+    }
+}
+
+/**
+ * The whitelist as a map: one tile per quota cell in slot order, tinted by purpose, named, tappable. Empty cells are
+ * outlined so the room left is visible at a glance.
+ */
+@Composable private fun SlotMap(s: State, snap: Snapshot, enabled: Boolean, edit: (Int) -> Unit) {
+    val colors = Apple.colors
+    val cells = CapacityBar.cells(snap, s.layout)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        cells.withIndex().chunked(5).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { (n, purpose) ->
+                    val slot = s.layout?.slots?.find { it.number == n }
+                    val tint = purpose?.let { purposeColor(it) }
+                    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Column(Modifier.weight(1f).height(66.dp).springPress(source, enabled).clip(RoundedCornerShape(14.dp))
+                        .background(tint?.copy(alpha = if (colors.dark) 0.2f else 0.12f) ?: Color.Transparent)
+                        .then(if (tint == null) Modifier.border(1.dp, colors.separator, RoundedCornerShape(14.dp)) else Modifier)
+                        .clickable(source, indication = null, enabled = enabled && n < snap.capacity, role = Role.Button) { edit(n) }
+                        .padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                        Text("${n + 1}", style = Apple.headline.copy(fontFeatureSettings = "tnum"), color = tint ?: colors.tertiary)
+                        Text(slot?.name?.takeIf { it.isNotBlank() } ?: if (purpose == null) "空" else "未命名",
+                            style = Apple.caption, color = if (tint == null) colors.tertiary else colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
+                repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
@@ -109,12 +144,33 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
     val snap = s.snapshot
     item(key = "wl-summary") {
         val wifi by c.wifiObservation.collectAsState()
+        val colors = Apple.colors
         if (snap == null) Section(footer = "请先在「设置」中连接 Po0 并检查连接。") {
             ListRow("尚未获取白名单", titleColor = Apple.colors.secondary)
             ActionRow("前往设置", onClick = configure)
-        } else Section {
-            CapacitySummary(s)
-            ListRow("当前网络", value = if (s.demo) "模拟网络" else wifiIdentityText(s, wifi)?.let { "Wi-Fi · $it" } ?: "未使用 Wi-Fi")
+        } else Reveal(0) {
+            Panel {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Column(Modifier.weight(1f)) {
+                        Text("名额", style = Apple.overline, color = colors.secondary)
+                        Text("已用 ${snap.entries.size} / ${snap.capacity}", style = Apple.display.copy(fontSize = Apple.display.fontSize * 0.82f), color = colors.label)
+                    }
+                    Text("剩余 ${snap.remaining}", style = Apple.subhead.copy(fontWeight = FontWeight.Medium),
+                        color = if (snap.remaining == 0) colors.orange else colors.secondary)
+                }
+                Spacer(Modifier.height(16.dp))
+                SlotMap(s, snap, !busy, edit)
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { Legend(CapacityBar.cells(snap, s.layout).filterNotNull()) }
+                    Row(Modifier.clip(CircleShape).background(colors.fill).padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Icon(Glyphs.Wifi, null, tint = colors.secondary, modifier = Modifier.size(13.dp))
+                        Text(if (s.demo) "模拟网络" else wifiIdentityText(s, wifi) ?: "未使用 Wi-Fi", style = Apple.footnote.copy(fontWeight = FontWeight.Medium),
+                            color = colors.label, maxLines = 1)
+                    }
+                }
+            }
         }
     }
     // Only notices this device can act on: one bound slot to join. The rest are left for the slot editor.
@@ -127,19 +183,27 @@ internal fun LazyListScope.slotItems(s: State, c: Controller, busy: Boolean, bac
         "后台无法识别 Wi-Fi：请在固定槽中开启「Wi-Fi 识别」".takeIf { !s.demo && !background &&
             s.layout?.slots?.any { it.purpose == SlotPurpose.FIXED && it.writer == Writer.LOCAL && it.bound } == true })
     if (notices.isNotEmpty() || apNotices.isNotEmpty()) item(key = "wl-notices") {
-        Section(header = "需要注意", inset = 50.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             apNotices.forEach { (notice, ap, slot) ->
-                ListRow("「${ap.ssid}」有新的接入点", subtitle = "加入${slotLabel(slot)}前需要你确认", chevron = true, enabled = !busy,
-                    leading = { Icon(Icons.Rounded.Warning, null, tint = Apple.colors.orange, modifier = Modifier.size(22.dp)) }) { confirmAp(notice) }
+                Callout("「${ap.ssid}」有新的接入点", "加入${slotLabel(slot)}前需要你确认", Apple.colors.orange, Icons.Rounded.Warning,
+                    onClick = if (busy) null else ({ confirmAp(notice) }))
             }
-            notices.forEach { ListRow(it, leading = { Icon(Icons.Rounded.Warning, null, tint = Apple.colors.orange, modifier = Modifier.size(22.dp)) }) }
+            notices.forEach { Callout(it, null, Apple.colors.orange, Icons.Rounded.Warning) }
         }
     }
     if (snap != null) item(key = "wl-slots") {
-        Section(header = "槽位", footer = "修改只保存在本机，开启自动同步后才会写入 Po0。", inset = 60.dp) {
-            (0 until snap.capacity).forEach { number ->
-                val slot = s.layout?.slots?.find { it.number == number } ?: ManagedSlot(number)
-                SlotRow(slot, snap.entries.find { it.slot == number }?.cidr?.value, enabled = !busy) { edit(number) }
+        Reveal(1) {
+            Column {
+                Text("槽位", style = Apple.footnote.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.secondary,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    (0 until snap.capacity).forEach { number ->
+                        val slot = s.layout?.slots?.find { it.number == number } ?: ManagedSlot(number)
+                        SlotCard(slot, snap.entries.find { it.slot == number }?.cidr?.value, enabled = !busy) { edit(number) }
+                    }
+                }
+                Text("修改只保存在本机，开启自动同步后才会写入 Po0。", style = Apple.footnote, color = Apple.colors.secondary,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
             }
         }
     }
@@ -155,21 +219,34 @@ private val healthy = setOf("SLOT_CURRENT", "SLOT_UPDATED", "RECOVERED_VERIFIED"
 private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_AMBIGUOUS", "WIFI_SECURITY_CHANGED", "EXTERNAL_CHANGE",
     "COVERED_OTHER_SLOT", "PENDING_REVIEW", "SHARED_RECENT", "PENDING_CONFIG_CHANGED", "LEGACY_UNINITIALIZED", "REBIND_REQUIRED")
 
-@Composable private fun SlotRow(slot: ManagedSlot, remote: String?, enabled: Boolean, onClick: () -> Unit) {
+/** One slot: its number in its purpose color, name and address, who writes it, and how it stands. */
+@Composable private fun SlotCard(slot: ManagedSlot, remote: String?, enabled: Boolean, onClick: () -> Unit) {
     val colors = Apple.colors
     val tint = when (slot.status) { in healthy -> colors.green; in attention -> colors.orange; else -> colors.gray }
-    Row(Modifier.fillMaxWidth().testTag("slot-${slot.number + 1}").pressable(onClick, enabled).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        NumberBadge("${slot.number + 1}", purposeColor(slot.purpose))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    val purpose = purposeColor(slot.purpose)
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Row(Modifier.fillMaxWidth().testTag("slot-${slot.number + 1}").springPress(source, enabled).clip(RoundedCornerShape(Apple.radius))
+        .background(colors.card).clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+        .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Box(Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(purpose.copy(alpha = if (colors.dark) 0.22f else 0.13f)),
+            contentAlignment = Alignment.Center) {
+            Text("${slot.number + 1}", style = Apple.title.copy(fontWeight = FontWeight.Bold), color = purpose)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(slot.name.ifBlank { "槽 ${slot.number + 1}" }, style = Apple.body, color = if (enabled) colors.label else colors.tertiary,
+                Text(slot.name.ifBlank { "槽 ${slot.number + 1}" }, style = Apple.headline, color = if (enabled) colors.label else colors.tertiary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text(remote ?: "空", style = Apple.subhead, color = colors.secondary)
+                Text(remote ?: "空", style = Apple.subhead.copy(fontFeatureSettings = "tnum", fontWeight = FontWeight.Medium),
+                    color = if (remote == null) colors.tertiary else colors.label)
             }
-            Text("${purposeText(slot.purpose)} · ${managerText(slot)}", style = Apple.footnote, color = colors.secondary)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Dot(tint); Text(statusText(slot.status), style = Apple.footnote, color = if (tint == colors.orange) colors.orange else colors.secondary)
+                Text("${purposeText(slot.purpose)} · ${managerText(slot)}", style = Apple.footnote, color = colors.secondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Dot(tint); Text(statusText(slot.status), style = Apple.footnote, color = if (tint == colors.orange) colors.orange else colors.secondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Icon(Icons.Rounded.KeyboardArrowRight, null, tint = colors.tertiary, modifier = Modifier.size(22.dp))
@@ -262,6 +339,20 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 680.dp).fillMaxSize().verticalScroll(scroll).imePadding().navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                // Which slot this is, before any field: its number in its purpose color and what Po0 holds there now.
+                Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    val tint = purposeColor(purpose)
+                    val bg by androidx.compose.animation.animateColorAsState(tint.copy(alpha = if (colors.dark) 0.22f else 0.13f), label = "tile")
+                    Box(Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)).background(bg), contentAlignment = Alignment.Center) {
+                        Text("${original.number + 1}", style = Apple.largeTitle.copy(fontSize = Apple.largeTitle.fontSize * 0.85f), color = tint)
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        // As saved: the field below is where the name changes.
+                        Text(original.name.ifBlank { "槽 ${original.number + 1}" }, style = Apple.title.copy(fontWeight = FontWeight.Bold), color = colors.label,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(remote?.value ?: "空槽", style = Apple.subhead.copy(fontFeatureSettings = "tnum"), color = colors.secondary)
+                    }
+                }
                 error?.let { message ->
                     Section { ListRow(message, titleColor = colors.red,
                         leading = { Icon(Icons.Rounded.Warning, null, tint = colors.red, modifier = Modifier.size(22.dp)) }) }

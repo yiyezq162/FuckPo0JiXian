@@ -21,7 +21,13 @@ val os: Os = System.getProperty("os.name").lowercase().let {
 data class DesktopLink(val iface: String?, val localIp: String?, val gatewayIp: String?, val gatewayMac: String?) {
     val key: String get() = listOf(iface, localIp, gatewayIp, gatewayMac).joinToString("|")
     val online get() = localIp != null
-    val kind get() = if (gatewayMac != null) NetworkKind.LAN else NetworkKind.OTHER
+    /**
+     * A network behind a router, even when its MAC could not be read: checks then say the router is unrecognized
+     * (on macOS usually a missing 本地网络 permission) instead of claiming there is nothing to update.
+     */
+    val kind get() = if (gatewayMac != null || gatewayIp != null) NetworkKind.LAN else NetworkKind.OTHER
+    /** Behind a router whose MAC cannot be read, so no slot can be matched to this network. */
+    val unidentified get() = online && gatewayIp != null && gatewayMac == null
     val label get() = gatewayIp?.let { "路由器 $it" } ?: if (online) "未识别的网络" else "未连接"
     fun observation(now: Long): WifiObservation? =
         gatewayMac?.let { WifiObservation(key, "gw:$gatewayIp", it, WifiSecurity.GATEWAY, now) }

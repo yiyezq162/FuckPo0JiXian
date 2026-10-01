@@ -23,6 +23,8 @@ enum class Look { MAC, WINDOWS }
 ) {
     /** Tinted background for a status or tag of [tint]. */
     fun soft(tint: Color) = tint.copy(alpha = if (dark) 0.22f else 0.12f)
+    /** The chick icon's yolk: the brand note, used for the one number that matters most (IP updates). */
+    val yolk: Color get() = if (dark) Color(0xFFFFC23D) else Color(0xFFE39D00)
 }
 
 @Immutable class Typography(val family: FontFamily, val pageTitle: TextStyle, val title: TextStyle, val headline: TextStyle,

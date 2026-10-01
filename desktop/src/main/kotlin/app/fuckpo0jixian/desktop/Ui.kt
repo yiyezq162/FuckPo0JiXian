@@ -1,6 +1,12 @@
 package app.fuckpo0jixian.desktop
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -194,36 +200,20 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
 @Composable private fun Overview(c: DesktopController, s: State, busy: Boolean, open: (Int) -> Unit, go: (Page) -> Unit) {
     val link by c.link.collectAsState()
     val credential by c.credentialPresent.collectAsState()
-    val h = headline(s, busy, credential)
-    // Hero: one sentence of state, big and calm.
-    Card(padding = PaddingValues(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Box(Modifier.size(52.dp).clip(CircleShape).background(colors.soft(h.tint)), contentAlignment = Alignment.Center) {
-                AnimatedContent(h.icon, label = "icon") { Icon(it, null, tint = h.tint, modifier = Modifier.size(26.dp)) }
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                AnimatedContent(h.title, label = "title") { Text(it, style = Type.title, color = colors.label) }
-                Text(when { busy -> "请稍候"; s.lastCheck <= 0 -> desktopText(s.status); else -> "${desktopText(s.status)} · ${ago(s.lastCheck)}检查" },
-                    style = Type.body, color = colors.secondary)
-            }
-        }
-        if (busy) { Spacer(Modifier.height(16.dp)); ProgressBar(null) }
-    }
+    Hero(s, busy, credential, link)
     if (!credential) Group(footer = "添加 Po0 Token 后才能查询白名单。") {
         SettingRow("连接 Po0", icon = Glyph.Key, onClick = { go(Page.SETTINGS) })
     }
+    if (link?.unidentified == true && credential) RouterCallout()
     Notices(s)
     if (s.globalBlock != null) Group(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；其他设备槽的更新可通过，未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
         SettingRow("只读复核保护状态", icon = Glyph.Sync, enabled = !busy && credential, onClick = c::reviewProtection)
     }
-    // Three facts at a glance.
+    TallyRow(c)
+    // Where this computer is, and how full the whitelist is.
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        val exit = s.snapshot?.current?.value
-        val d = s.domesticExit
-        Fact("当前出口", exit ?: "未检查", if (d != null && s.snapshot != null) (if (d.cidr == s.snapshot!!.current) "直连出口一致" else "直连出口 ${d.cidr.value}") else "Po0 识别",
-            Glyph.Globe, Modifier.weight(1f), mono = exit != null)
         Fact("网络", matchedName(s, link) ?: link?.label ?: "未连接", matchedName(s, link)?.let { link?.label } ?: when {
-                link?.gatewayIp != null && link?.gatewayMac == null -> "无法识别路由器，见白名单里的槽位"
+                link?.unidentified == true -> "无法识别路由器"
                 link?.online == true -> "未绑定到固定槽"
                 else -> ""
             },
@@ -232,10 +222,11 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
             Card(Modifier.weight(1f).fillMaxHeight(), padding = PaddingValues(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Icon(Glyph.List, null, tint = colors.secondary, modifier = Modifier.size(14.dp))
-                    Text("名额", style = Type.caption, color = colors.secondary)
+                    Text("名额", style = Type.caption, color = colors.secondary, modifier = Modifier.weight(1f))
+                    Text("剩余 ${snap.remaining}", style = Type.caption, color = colors.secondary)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text("${snap.entries.size} / ${snap.capacity}", style = Type.title, color = colors.label)
+                Text("${snap.entries.size} / ${snap.capacity}", style = Type.title.copy(fontFeatureSettings = "tnum"), color = colors.label)
                 Spacer(Modifier.height(8.dp))
                 CapacityCells(s, snap)
             }
@@ -253,6 +244,116 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
     val events = s.events.takeLast(4).reversed()
     if (events.isNotEmpty()) Group("最近事件", action = { Button("全部", { go(Page.RECORDS) }, ButtonKind.SUBTLE) }) {
         events.forEachIndexed { i, e -> if (i > 0) Divider(); EventRow(e) }
+    }
+}
+
+/**
+ * State on the left (a breathing signal while checking), the exit on the right as the one big number, in a card lit
+ * softly from its corner by the current mood.
+ */
+@Composable private fun Hero(s: State, busy: Boolean, credential: Boolean, link: DesktopLink?) {
+    val h = headline(s, busy, credential)
+    val tint by animateColorAsState(h.tint, tween(500), label = "mood")
+    val shape = RoundedCornerShape(theme.metrics.radius * 1.6f)
+    val d = s.domesticExit
+    val glow = if (colors.dark) 0.22f else 0.12f
+    Row(Modifier.fillMaxWidth().clip(shape).background(colors.card).border(0.5.dp, colors.cardBorder, shape)
+        .drawBehind {
+            drawCircle(Brush.radialGradient(listOf(tint.copy(alpha = glow), Color.Transparent),
+                center = Offset(size.width, 0f), radius = size.width * 0.6f), radius = size.width * 0.6f, center = Offset(size.width, 0f))
+        }.padding(horizontal = 24.dp, vertical = 22.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Signal(h.icon, tint, busy)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            AnimatedContent(h.title, label = "title", transitionSpec = {
+                (fadeIn(tween(220)) + slideInVertically { it / 3 }) togetherWith (fadeOut(tween(150)) + slideOutVertically { -it / 3 })
+            }) { Text(it, style = Type.pageTitle, color = colors.label) }
+            Text(when { busy -> "请稍候"; s.lastCheck <= 0 -> desktopText(s.status); else -> "${desktopText(s.status)} · ${ago(s.lastCheck)}检查" },
+                style = Type.body, color = colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("当前出口", style = Type.caption.copy(fontWeight = FontWeight.Medium), color = colors.secondary)
+            val exit = s.snapshot?.current?.value
+            AnimatedContent(exit ?: "未检查", label = "exit") {
+                Text(it, style = Type.pageTitle.copy(fontSize = Type.pageTitle.fontSize * 1.25f, fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.5).sp, fontFeatureSettings = "tnum"), color = if (exit == null) colors.tertiary else colors.label, maxLines = 1)
+            }
+            Text(when {
+                d == null || s.snapshot == null -> "Po0 识别"
+                d.cidr == s.snapshot!!.current -> if (d.source == ProbeSource.STUN) "直连出口一致" else "出口一致（HTTPS，未直连验证）"
+                else -> "直连出口 ${d.cidr.value}"
+            }, style = Type.caption, color = colors.secondary, maxLines = 1)
+        }
+    }
+}
+
+@Composable private fun Signal(icon: ImageVector, tint: Color, busy: Boolean) {
+    Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+        if (busy) {
+            val wave = rememberInfiniteTransition(label = "wave")
+            repeat(2) { i ->
+                val t by wave.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearOutSlowInEasing),
+                    initialStartOffset = StartOffset(800 * i)), label = "ring$i")
+                Box(Modifier.size(56.dp).graphicsLayer { scaleX = 1f + t * 0.6f; scaleY = 1f + t * 0.6f; alpha = (1f - t) * 0.5f }
+                    .border(1.5.dp, tint, CircleShape))
+            }
+        }
+        Box(Modifier.size(56.dp).clip(CircleShape).background(colors.soft(tint)), contentAlignment = Alignment.Center) {
+            AnimatedContent(icon, label = "icon", transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.6f)) togetherWith fadeOut() }) {
+                Icon(it, null, tint = tint, modifier = Modifier.size(28.dp))
+            }
+        }
+    }
+}
+
+/** Lifetime counters: did this computer actually do anything? */
+@Composable private fun TallyRow(c: DesktopController) {
+    val t by c.tally.flow.collectAsState()
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Stat("更新 IP", t.ipUpdates, colors.yolk, Glyph.Sync, Modifier.weight(1f), t.lastUpdate.takeIf { it > 0 }?.let { "上次 ${time(it)}" })
+            Stat("完成检查", t.checks, colors.label, Glyph.Shield, Modifier.weight(1f))
+            Stat("网络切换", t.networkChanges, colors.label, Glyph.Router, Modifier.weight(1f))
+        }
+        Text((if (t.since > 0) "自 ${sinceFormat.format(Instant.ofEpochMilli(t.since))}起" else "从现在起") + "累计，删除应用数据才会清零。",
+            style = Type.caption, color = colors.secondary, modifier = Modifier.padding(horizontal = 2.dp))
+    }
+}
+private val sinceFormat = DateTimeFormatter.ofPattern("yyyy 年 M 月 d 日").withZone(ZoneId.systemDefault())
+
+@Composable private fun Stat(label: String, value: Long, tint: Color, icon: ImageVector, modifier: Modifier, hint: String? = null) {
+    Card(modifier.fillMaxHeight(), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, null, tint = colors.secondary, modifier = Modifier.size(14.dp))
+            Text(label, style = Type.caption, color = colors.secondary)
+        }
+        Spacer(Modifier.height(4.dp))
+        val animated = remember { Animatable(0f) }
+        LaunchedEffect(value) { animated.animateTo(value.toFloat(), tween(if (value < 3) 300 else 900, easing = FastOutSlowInEasing)) }
+        Text(compactCount(animated.value.toLong().coerceAtMost(value)), style = Type.pageTitle.copy(fontSize = Type.pageTitle.fontSize * 1.2f,
+            fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"), color = tint, maxLines = 1)
+        hint?.let { Text(it, style = Type.caption, color = colors.tertiary, maxLines = 1) }
+    }
+}
+
+/**
+ * The router's MAC identifies home and office. On macOS it stays hidden from apps without the 本地网络 permission,
+ * which leaves every check here at "无法识别路由器" (seen on a Mac for days). One click to the right pane.
+ */
+@Composable private fun RouterCallout() {
+    val mac = os == Os.MAC
+    val shape = RoundedCornerShape(theme.metrics.radius)
+    Row(Modifier.fillMaxWidth().clip(shape).background(colors.soft(colors.orange)).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(Glyph.Warning, null, tint = colors.orange, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("无法识别路由器", style = Type.headline, color = colors.label)
+            Text(if (mac) "请在「系统设置 › 隐私与安全性 › 本地网络」中允许去他妈的鸡险，否则固定槽不会自动更新。"
+                else "读不到路由器的硬件地址，固定槽不会自动更新。", style = Type.caption, color = colors.secondary)
+        }
+        if (mac) Button("打开设置", {
+            runCatching { ProcessBuilder("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork").start() }
+        })
     }
 }
 
@@ -303,41 +404,31 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
     val now = System.currentTimeMillis()
     val history = remember(s.observations) { NetworkHistory.summarize(s.observations, now) }
     var confirm by remember { mutableStateOf(false) }
-    Group("检查") {
-        ValueRow("状态", desktopText(s.status), icon = Glyph.Shield, iconTint = colors.green)
-        Divider(48.dp); ValueRow("上次检查", time(s.lastCheck), icon = Glyph.Clock, iconTint = colors.accent)
-        Divider(48.dp); ValueRow("下次可请求", if (s.nextAllowed > now) time(s.nextAllowed) else "随时", icon = Glyph.Sync, iconTint = colors.indigo)
-        Divider(48.dp); ValueRow("连续失败", "${s.failures} 次", icon = Glyph.Warning, iconTint = if (s.failures > 0) colors.orange else colors.gray,
-            valueColor = if (s.failures > 0) colors.orange else colors.secondary)
-    }
-    Group("国内出口", footer = "写入前要求直连出口与 Po0 识别一致，代理的地址不会写入。") {
-        val d = s.domesticExit
-        SettingRow("直连出口", subtitle = d?.let { "${if (it.source == ProbeSource.STUN) "STUN（物理网卡）" else "ip.3322.net"} · ${time(it.time)}" }
-            ?: desktopText(s.probeStatus), icon = Glyph.Router, iconTint = colors.accent) {
-            Text(d?.ipv4 ?: "未查询", style = Type.numeric, color = colors.secondary)
-        }
-        Divider(48.dp)
-        SettingRow("Po0 识别", icon = Glyph.Globe, iconTint = colors.indigo) {
-            s.snapshot?.current?.let { cur ->
-                if (d != null) Tag(if (d.cidr == cur) "一致" else "不一致", if (d.cidr == cur) colors.green else colors.orange)
+    // How the last check stands, as four figures.
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        val tint = when { s.authBlocked || s.globalBlock != null -> colors.red; s.failures > 0 -> colors.orange; s.lastCheck > 0 -> colors.green; else -> colors.gray }
+        Card(Modifier.weight(1.4f).fillMaxHeight(), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+            Text("状态", style = Type.caption, color = colors.secondary)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Dot(tint, 8.dp); Text(desktopText(s.status), style = Type.headline, color = colors.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Text(s.snapshot?.current?.value ?: "未检查", style = Type.numeric, color = colors.secondary)
         }
-        Divider(48.dp)
-        SettingRow("比对出口", subtitle = "只查出口，不请求 Po0", icon = Glyph.Sync, iconTint = colors.green) {
-            Button("立即比对", c::checkDomestic, enabled = !s.paused)
-        }
+        Figure("上次检查", if (s.lastCheck > 0) ago(s.lastCheck) else "暂无", Modifier.weight(1f))
+        Figure("下次可请求", if (s.nextAllowed > now) time(s.nextAllowed) else "随时", Modifier.weight(1f))
+        Figure("连续失败", "${s.failures} 次", Modifier.weight(1f), if (s.failures > 0) colors.orange else colors.label)
     }
+    ExitComparison(c, s)
     Group("常用网络", footer = "近 7 天的使用统计，只作参考，不会据此修改白名单。") {
         if (history.isEmpty()) SettingRow("暂无记录", titleColor = colors.secondary)
-        history.take(3).forEachIndexed { i, n -> if (i > 0) Divider(); NetworkRow(n) }
-        if (history.size > 3) { Divider(); Expander("其余 ${history.size - 3} 个") { history.drop(3).take(17).forEach { Divider(); NetworkRow(it) } } }
+        history.take(4).forEachIndexed { i, n -> if (i > 0) Divider(); NetworkRow(n) }
+        if (history.size > 4) { Divider(); Expander("其余 ${history.size - 4} 个") { history.drop(4).take(16).forEach { Divider(); NetworkRow(it) } } }
     }
     val events = s.events.filter { it.time >= now - c.policy.retentionMs }.reversed()
     Group("事件", footer = "只反映 Po0 与出口查询看到的结果。") {
         if (events.isEmpty()) SettingRow("暂无事件", titleColor = colors.secondary)
-        events.take(5).forEachIndexed { i, e -> if (i > 0) Divider(); EventRow(e) }
-        if (events.size > 5) { Divider(); Expander("显示全部 ${events.size} 条") { events.drop(5).forEach { Divider(); EventRow(it) } } }
+        Column(Modifier.padding(top = 12.dp, bottom = 2.dp)) { TimelineRows(events.take(6)) }
+        if (events.size > 6) { Divider(); Expander("显示全部 ${events.size} 条") { Column(Modifier.padding(top = 12.dp)) { TimelineRows(events.drop(6)) } } }
     }
     Group("诊断") {
         val trace = remember(s.lastCheck) { BoundTransport.trace() }
@@ -374,12 +465,82 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
         actions = listOf(DialogAction("清空", destructive = true) { c.clearHistory(); confirm = false }, DialogAction("取消") { confirm = false }))
 }
 
+/** An exit seen this week: its /24, a bar of how many of the 7 days it appeared, and the counts. */
 @Composable private fun NetworkRow(n: FamiliarNetwork) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(n.cidr.value, style = Type.numeric, color = colors.label, modifier = Modifier.weight(1f))
-        if (n.common) Tag("常用", colors.green)
-        Text("${n.days} 天 · ${n.visits} 次 · ${time(n.lastSeen)}", style = Type.caption, color = colors.secondary)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(Modifier.width(190.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(n.cidr.value, style = Type.numeric.copy(fontWeight = FontWeight.Medium), color = colors.label)
+            if (n.common) Tag("常用", colors.green)
+        }
+        val share by animateFloatAsState((n.days / 7f).coerceIn(0.04f, 1f), tween(700), label = "days")
+        Box(Modifier.weight(1f).height(6.dp).clip(CircleShape).background(colors.fill)) {
+            Box(Modifier.fillMaxWidth(share).fillMaxHeight().clip(CircleShape).background(if (n.common) colors.green else colors.accent))
+        }
+        Text("${n.days} 天 · ${n.visits} 次 · ${time(n.lastSeen)}", style = Type.caption.copy(fontFeatureSettings = "tnum"), color = colors.secondary)
+    }
+}
+
+@Composable private fun Figure(label: String, value: String, modifier: Modifier, tint: Color = colors.label) {
+    Card(modifier.fillMaxHeight(), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+        Text(label, style = Type.caption, color = colors.secondary)
+        Spacer(Modifier.height(6.dp))
+        Text(value, style = Type.title.copy(fontSize = Type.title.fontSize * 0.88f, fontFeatureSettings = "tnum"), color = tint,
+            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * The exit as this computer sees it directly and as Po0 sees it, side by side and joined by whether they agree; a
+ * write needs both to name the same /24, measured by STUN.
+ */
+@Composable private fun ExitComparison(c: DesktopController, s: State) {
+    val d = s.domesticExit
+    val current = s.snapshot?.current
+    val (verdict, tint) = when {
+        d == null || current == null -> "等待核对" to colors.gray
+        d.cidr != current -> "不一致" to colors.orange
+        d.source != ProbeSource.STUN -> "一致 · 未直连验证" to colors.orange
+        else -> "一致" to colors.green
+    }
+    Group("出口核对", footer = "写入前要求 STUN 直连出口与 Po0 识别一致；经 HTTPS 查到的出口只作参考，代理的地址不会写入。",
+        action = { Button("立即比对", c::checkDomestic, ButtonKind.SUBTLE, enabled = !s.paused) }) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Reading("直连出口", d?.ipv4 ?: "未查询", d?.let { "${if (it.source == ProbeSource.STUN) "STUN · 物理网卡" else "ip.3322.net"} · ${time(it.time)}" }
+                ?: desktopText(s.probeStatus), Modifier.weight(1f), Alignment.Start)
+            // The joint between the two readings.
+            Row(Modifier.weight(0.9f), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f).height(1.5.dp).background(tint.copy(alpha = 0.45f)))
+                Tag(verdict, tint, if (tint == colors.green) Glyph.Check else null)
+                Box(Modifier.weight(1f).height(1.5.dp).background(tint.copy(alpha = 0.45f)))
+            }
+            Reading("Po0 识别", current?.value ?: "未检查", "Po0 看到的出口 /24", Modifier.weight(1f), Alignment.End)
+        }
+    }
+}
+
+@Composable private fun Reading(label: String, value: String, detail: String, modifier: Modifier, align: Alignment.Horizontal) {
+    Column(modifier, horizontalAlignment = align, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = Type.caption.copy(fontWeight = FontWeight.Medium), color = colors.secondary)
+        Text(value, style = Type.title.copy(fontSize = Type.title.fontSize * 1.15f, fontFeatureSettings = "tnum"), color = colors.label, maxLines = 1)
+        Text(detail, style = Type.caption, color = colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Events newest first on a rail: a colored dot per event, joined by a hairline. */
+@Composable private fun TimelineRows(events: List<Event>) {
+    events.forEachIndexed { i, e ->
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.width(9.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(4.dp))
+                Box(Modifier.size(9.dp).clip(CircleShape).background(eventTint(e.code)))
+                if (i < events.lastIndex) Box(Modifier.width(1.dp).weight(1f).background(colors.separator))
+            }
+            Row(Modifier.weight(1f).padding(bottom = 12.dp)) {
+                Text(desktopText(e.code), style = Type.body, color = colors.label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(time(e.time), style = Type.caption.copy(fontFeatureSettings = "tnum"), color = colors.secondary)
+            }
+        }
     }
 }
 
@@ -394,14 +555,30 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
     var export by remember { mutableStateOf(false) }
     var peer by remember { mutableStateOf<PeerLayout?>(null) }
     var autostart by remember { mutableStateOf(runCatching { Autostart.enabled() }.getOrDefault(false)) }
-    UpdateGroup(c)
-    Group("Po0 账户", footer = "Token 保存在${if (os == Os.WINDOWS) " Windows 凭据加密（DPAPI）" else "系统钥匙串"}中。") {
-        SettingRow("Token", subtitle = if (!credential) "未添加" else "上次连接 ${time(s.lastSuccess)}" +
-            if (s.endpoint != Po0Credential.DEFAULT_ENDPOINT) " · ${s.endpoint.removePrefix("https://")}" else "", icon = Glyph.Key, iconTint = colors.accent) {
+    // The account, as a card: whether this computer is connected, and the actions that change that.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val connected = credential && s.lastSuccess > 0
+        val shape = RoundedCornerShape(theme.metrics.radius * 1.6f)
+        Row(Modifier.fillMaxWidth().clip(shape).background(colors.card).border(0.5.dp, colors.cardBorder, shape).padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(colors.soft(colors.yolk)), contentAlignment = Alignment.Center) {
+                Icon(Glyph.Key, null, tint = colors.yolk, modifier = Modifier.size(24.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(when { !credential -> "尚未连接 Po0"; connected -> "已连接 Po0"; else -> "Token 已保存" }, style = Type.title, color = colors.label)
+                    Dot(when { s.authBlocked -> colors.red; connected -> colors.green; else -> colors.gray })
+                }
+                Text(if (!credential) "粘贴 Token 或官方接口链接即可" else (if (s.lastSuccess > 0) "上次连接 ${time(s.lastSuccess)}" else "尚未连接") +
+                    if (s.endpoint != Po0Credential.DEFAULT_ENDPOINT) " · ${s.endpoint.removePrefix("https://")}" else "",
+                    style = Type.body, color = colors.secondary)
+            }
+            if (credential) Button("移除", { remove = true }, ButtonKind.SUBTLE, enabled = !busy)
             if (credential) Button("检查连接", c::checkConnection, enabled = !busy, loading = busy)
-            Button(if (credential) "更换" else "添加", { tokenDialog = true }, if (credential) ButtonKind.SECONDARY else ButtonKind.PRIMARY, enabled = !busy)
+            Button(if (credential) "更换 Token" else "添加 Token", { tokenDialog = true }, if (credential) ButtonKind.SECONDARY else ButtonKind.PRIMARY, enabled = !busy)
         }
-        if (credential) { Divider(48.dp); SettingRow("移除连接", subtitle = "删除本机 Token 与槽位配置", icon = Glyph.Power, iconTint = colors.red, titleColor = colors.red, enabled = !busy) { Button("移除", { remove = true }, ButtonKind.DESTRUCTIVE) } }
+        Text("Token 保存在${if (os == Os.WINDOWS) " Windows 凭据加密（DPAPI）" else "系统钥匙串"}中；检查连接只读取白名单，不会修改。",
+            style = Type.caption, color = colors.secondary, modifier = Modifier.padding(horizontal = 2.dp))
     }
     Group("同步") {
         ToggleRow("自动同步", s.mode == Mode.AUTO, { c.mode(if (it) Mode.AUTO else Mode.OBSERVE) },
@@ -442,6 +619,7 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
                 subtitle = "关闭后只在菜单栏显示")
         }
     }
+    UpdateGroup(c)
     Text("按路由器识别网络，不需要定位权限。出口直接从本机网卡核对，开着代理或 TUN 也不会把代理地址写入白名单。",
         style = Type.caption, color = colors.secondary, modifier = Modifier.padding(horizontal = 2.dp))
     if (tokenDialog) {
@@ -490,7 +668,7 @@ internal data class Headline(val title: String, val tint: Color, val icon: Image
 
 @Composable private fun UpdateGroup(c: DesktopController) {
     val state by c.updater.state.collectAsState()
-    Group("版本") {
+    Group("关于") {
         SettingRow("去他妈的鸡险 ${c.version}", subtitle = when (val u = state) {
             UpdateState.Idle -> "自动检查更新，每天一次"
             UpdateState.Checking -> "正在检查…"

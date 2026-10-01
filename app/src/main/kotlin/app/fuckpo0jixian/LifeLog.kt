@@ -106,7 +106,8 @@ object LifeLog {
 
     /** People-facing summary of the latest exit the system recorded, for Settings. */
     fun lastExit(): Pair<Long, String>? {
-        val line = recent().lastOrNull { it.contains(" EXIT ") } ?: return null
+        // Only the system's exit records; "STATE EXIT <address> via STUN" lines are exit probes, not process deaths.
+        val line = recent().lastOrNull { it.substringAfter(' ').startsWith("EXIT ") } ?: return null
         val at = runCatching { Instant.parse(line.substringBefore(' ')).toEpochMilli() }.getOrNull() ?: return null
         val code = line.substringAfter(" EXIT ").substringBefore(' ')
         val text = when (code) {

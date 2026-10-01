@@ -27,6 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.border
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -51,27 +54,44 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
-/** iOS-style semantic colors; every screen reads these instead of raw Material roles. */
+/**
+ * Semantic colors; every screen reads these instead of raw Material roles. A warm paper neutral instead of system
+ * gray, ink for the primary action, the icon's yolk as the one brand note, and green / orange / red only for state.
+ */
 @Immutable data class AppleColors(
     val accent: Color, val green: Color, val orange: Color, val red: Color, val indigo: Color, val gray: Color,
     val background: Color, val card: Color, val pressed: Color, val label: Color, val secondary: Color,
     val tertiary: Color, val separator: Color, val fill: Color, val segment: Color, val bar: Color,
+    /** Primary buttons: near-black on paper, near-white at night. */
+    val ink: Color, val onInk: Color,
+    /** The chick's yolk, for the brand mark and the one number that matters most. */
+    val yolk: Color,
+    val dark: Boolean,
 )
 private val Light = AppleColors(
-    accent = Color(0xFF007AFF), green = Color(0xFF34C759), orange = Color(0xFFFF9500), red = Color(0xFFFF3B30),
-    indigo = Color(0xFF5856D6), gray = Color(0xFF8E8E93), background = Color(0xFFF2F2F7), card = Color.White,
-    pressed = Color(0xFFD1D1D6), label = Color.Black, secondary = Color(0x993C3C43), tertiary = Color(0x4D3C3C43),
-    separator = Color(0x4A3C3C43), fill = Color(0x1F787880), segment = Color.White, bar = Color(0xFFF9F9F9))
+    accent = Color(0xFF2F6BFF), green = Color(0xFF1E9E57), orange = Color(0xFFE88A00), red = Color(0xFFE5484D),
+    indigo = Color(0xFF6E56CF), gray = Color(0xFF8D8A83), background = Color(0xFFF4F2EE), card = Color.White,
+    pressed = Color(0xFFEDEAE4), label = Color(0xFF151513), secondary = Color(0x9E3A3833), tertiary = Color(0x543A3833),
+    separator = Color(0x1F3A3833), fill = Color(0x173A3833), segment = Color.White, bar = Color(0xFFF4F2EE),
+    ink = Color(0xFF151513), onInk = Color(0xFFFBFAF7), yolk = Color(0xFFF2A900), dark = false)
 private val Dark = AppleColors(
-    accent = Color(0xFF0A84FF), green = Color(0xFF30D158), orange = Color(0xFFFF9F0A), red = Color(0xFFFF453A),
-    indigo = Color(0xFF5E5CE6), gray = Color(0xFF8E8E93), background = Color.Black, card = Color(0xFF1C1C1E),
-    pressed = Color(0xFF3A3A3C), label = Color.White, secondary = Color(0x99EBEBF5), tertiary = Color(0x4DEBEBF5),
-    separator = Color(0xA6545458), fill = Color(0x3D767680), segment = Color(0xFF636366), bar = Color(0xFF161618))
+    accent = Color(0xFF6E92FF), green = Color(0xFF3DD27A), orange = Color(0xFFFFA733), red = Color(0xFFFF6369),
+    indigo = Color(0xFF9D8CFF), gray = Color(0xFF8F8C86), background = Color(0xFF0C0C0D), card = Color(0xFF17171A),
+    pressed = Color(0xFF242428), label = Color(0xFFF4F2EE), secondary = Color(0x9EF4F2EE), tertiary = Color(0x4DF4F2EE),
+    separator = Color(0x24F4F2EE), fill = Color(0x1FF4F2EE), segment = Color(0xFF2E2E33), bar = Color(0xFF0C0C0D),
+    ink = Color(0xFFF4F2EE), onInk = Color(0xFF151513), yolk = Color(0xFFFFC23D), dark = true)
 private val LocalApple = staticCompositionLocalOf { Light }
 
 object Apple {
     val colors: AppleColors @Composable @ReadOnlyComposable get() = LocalApple.current
-    val largeTitle = TextStyle(fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold)
+    /** Card corners; controls use a step less. */
+    val radius = 20.dp
+    val largeTitle = TextStyle(fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
+    /** The one big fact on a screen (the exit, a count): tight, tabular figures so it never jitters as it changes. */
+    val display = TextStyle(fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.8).sp,
+        fontFeatureSettings = "tnum")
+    /** Small label above a value. */
+    val overline = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp)
     val title = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold)
     val headline = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
     val body = TextStyle(fontSize = 16.sp, lineHeight = 22.sp)
@@ -116,8 +136,9 @@ object Glyphs {
                         content: @Composable () -> Unit) {
     val c = Apple.colors
     Column(modifier.fillMaxWidth()) {
-        header?.let { Text(it, style = Apple.footnote, color = c.secondary, modifier = Modifier.padding(start = 16.dp, bottom = 7.dp)) }
-        SubcomposeLayout(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.card)) { constraints ->
+        header?.let { Text(it, style = Apple.footnote.copy(fontWeight = FontWeight.SemiBold), color = c.secondary,
+            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) }
+        SubcomposeLayout(Modifier.fillMaxWidth().clip(RoundedCornerShape(Apple.radius)).background(c.card)) { constraints ->
             val loose = constraints.copy(minHeight = 0)
             val rows = subcompose("rows", content).map { it.measure(loose) }.filter { it.height > 0 }
             val hairline = maxOf(1, (0.5.dp).roundToPx())
@@ -238,17 +259,18 @@ object Glyphs {
 }
 
 @Composable fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
-                              loading: Boolean = false, tinted: Boolean = false) {
+                              loading: Boolean = false, tinted: Boolean = false, icon: ImageVector? = null) {
     val c = Apple.colors
     val source = remember { MutableInteractionSource() }
-    val pressed by source.collectIsPressedAsState()
-    val alpha by animateFloatAsState(if (pressed) 0.7f else 1f, label = "press")
-    val bg = when { !enabled -> c.fill; tinted -> c.accent.copy(alpha = if (c.background == Color.Black) 0.24f else 0.12f); else -> c.accent }
-    val fg = when { !enabled -> c.tertiary; tinted -> c.accent; else -> Color.White }
-    Row(modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(14.dp)).background(bg.copy(alpha = bg.alpha * alpha))
+    val bg = when { !enabled -> c.fill; tinted -> c.card; else -> c.ink }
+    val fg = when { !enabled -> c.tertiary; tinted -> c.label; else -> c.onInk }
+    val bgColor by animateColorAsState(bg, label = "button")
+    Row(modifier.fillMaxWidth().height(54.dp).springPress(source, enabled).clip(RoundedCornerShape(17.dp)).background(bgColor)
+        .then(if (tinted && enabled) Modifier.border(1.dp, c.separator, RoundedCornerShape(17.dp)) else Modifier)
         .clickable(source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         if (loading) { CircularProgressIndicator(Modifier.size(18.dp), color = fg, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)) }
+        else icon?.let { Icon(it, null, tint = fg, modifier = Modifier.size(19.dp)); Spacer(Modifier.width(8.dp)) }
         Text(text, style = Apple.headline, color = fg)
     }
 }
@@ -268,7 +290,7 @@ class AlertAction(val text: String, val destructive: Boolean = false, val prefer
                          content: (@Composable ColumnScope.() -> Unit)? = null) {
     val c = Apple.colors
     Dialog(onDismiss, DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.widthIn(max = 300.dp).fillMaxWidth(0.78f).clip(RoundedCornerShape(14.dp)).background(c.card)) {
+        Column(Modifier.widthIn(max = 300.dp).fillMaxWidth(0.78f).clip(RoundedCornerShape(22.dp)).background(c.card)) {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, top = 20.dp, bottom = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(title, style = Apple.headline, color = c.label, textAlign = TextAlign.Center)
@@ -347,5 +369,73 @@ class AlertAction(val text: String, val destructive: Boolean = false, val prefer
             Box(Modifier.size(0.5.dp, 18.dp).background(c.separator))
             Button("+", 1)
         }
+    }
+}
+
+/** Pressed things sink a little and spring back; a quiet, physical answer to a touch. */
+@Composable fun Modifier.springPress(source: MutableInteractionSource, enabled: Boolean = true): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed && enabled) 0.97f else 1f, spring(dampingRatio = 0.6f, stiffness = 900f), label = "press")
+    return graphicsLayer { scaleX = scale; scaleY = scale }
+}
+
+/** A count that rolls up to [value] the first time it is shown and whenever it grows. */
+@Composable fun CountUp(value: Long, style: TextStyle, color: Color, modifier: Modifier = Modifier, format: (Long) -> String = { "$it" }) {
+    val animated = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(value) {
+        animated.animateTo(value.toFloat(), androidx.compose.animation.core.tween(durationMillis = if (value < 3) 300 else 900,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing))
+    }
+    Text(format(animated.value.toLong().coerceAtMost(value)), style = style.copy(fontFeatureSettings = "tnum"), color = color, modifier = modifier)
+}
+
+/**
+ * Content that rises and fades in once, [index] steps after the first; used for the overview's sections so the page
+ * assembles itself instead of popping in. Shown at once in later compositions (scrolling back, recomposition).
+ */
+@Composable fun Reveal(index: Int, content: @Composable () -> Unit) {
+    var shown by rememberSaveable { mutableStateOf(false) }
+    val progress = remember { androidx.compose.animation.core.Animatable(if (shown) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!shown) { delay(60L * index); progress.animateTo(1f, spring(dampingRatio = 0.9f, stiffness = 260f)); shown = true }
+    }
+    Box(Modifier.graphicsLayer { alpha = progress.value; translationY = (1f - progress.value) * 18.dp.toPx() }) { content() }
+}
+
+/** A free-form card for designed blocks (heroes, gauges, comparisons); lists keep using [Section]. */
+@Composable fun Panel(modifier: Modifier = Modifier, header: String? = null, footer: String? = null,
+                      padding: PaddingValues = PaddingValues(20.dp), content: @Composable ColumnScope.() -> Unit) {
+    val c = Apple.colors
+    Column(modifier.fillMaxWidth()) {
+        header?.let { Text(it, style = Apple.footnote.copy(fontWeight = FontWeight.SemiBold), color = c.secondary,
+            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) }
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Apple.radius)).background(c.card).padding(padding), content = content)
+        footer?.let { Text(it, style = Apple.footnote, color = c.secondary, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp)) }
+    }
+}
+
+/** A tinted note that asks for attention (or offers a way out); tappable when [onClick] is given. */
+@Composable fun Callout(title: String, text: String?, tint: Color, icon: ImageVector, onClick: (() -> Unit)? = null) {
+    val c = Apple.colors
+    val source = remember { MutableInteractionSource() }
+    Row(Modifier.fillMaxWidth().springPress(source, onClick != null).clip(RoundedCornerShape(Apple.radius))
+        .background(tint.copy(alpha = if (c.dark) 0.18f else 0.11f))
+        .then(if (onClick != null) Modifier.clickable(source, indication = null, role = Role.Button, onClick = onClick) else Modifier)
+        .padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = Apple.headline, color = c.label)
+            text?.let { Text(it, style = Apple.footnote, color = c.secondary) }
+        }
+        if (onClick != null) Icon(Icons.Rounded.KeyboardArrowRight, null, tint = c.tertiary, modifier = Modifier.size(22.dp))
+    }
+}
+
+/** Small rounded label: a state or a role next to a name. */
+@Composable fun Pill(text: String, tint: Color, icon: ImageVector? = null) {
+    Row(Modifier.clip(CircleShape).background(tint.copy(alpha = if (Apple.colors.dark) 0.2f else 0.12f)).padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        icon?.let { Icon(it, null, tint = tint, modifier = Modifier.size(12.dp)) }
+        Text(text, style = Apple.caption.copy(fontWeight = FontWeight.SemiBold), color = tint, maxLines = 1)
     }
 }

@@ -46,6 +46,7 @@ class DesktopControllerTest {
     @Test fun homeRouterUpdatesTheFixedSlotAndCafeUsesTheTravelSlot() = runBlocking {
         val internet = FakeInternet("203.0.113.9", mutableMapOf(0 to "198.51.100.0/24"))
         var link = home
+        stunExit = { internet.exit }
         val c = setup(internet) { link }
         assertEquals("SLOT_UPDATED", c.runCheck(manual = true))
         assertEquals("203.0.113.0/24", internet.entries[0])
@@ -61,6 +62,7 @@ class DesktopControllerTest {
 
     @Test fun samePoolWithADifferentRouterIsNotHome() = runBlocking {
         val internet = FakeInternet("203.0.113.9", mutableMapOf(0 to "198.51.100.0/24"))
+        stunExit = { internet.exit }
         val c = setup(internet) { home.copy(gatewayMac = "a4:11:22:33:44:99") }
         // An unknown router falls to the travel slot, never to the fixed "home" slot.
         assertEquals("SLOT_UPDATED", c.runCheck(manual = true))
@@ -77,6 +79,19 @@ class DesktopControllerTest {
         val c = DesktopController(base.store, base.vault, { home }, stun = { null }) { _, _ -> internet }
         assertEquals("EGRESS_UNVERIFIED", c.runCheck(manual = true))
         assertTrue(internet.inner.calls.none { it.startsWith("POST") })
+    }
+
+    /**
+     * A Mac running Clash once got a foreign exit from the HTTPS probe, and Po0 (asked through the tunnel) agreed.
+     * Agreement without STUN must never write.
+     */
+    @Test fun httpsExitAloneNeverWrites() = runBlocking {
+        val internet = FakeInternet("203.0.113.9", mutableMapOf(0 to "198.51.100.0/24"))
+        stunExit = null
+        val c = setup(internet) { home }
+        assertEquals("EGRESS_UNVERIFIED", c.runCheck(manual = true))
+        assertEquals(ProbeSource.IP3322, c.store.load().domesticExit?.source)
+        assertTrue(internet.calls.none { it.startsWith("POST") })
     }
 
     @Test fun stunIsTheExitWhenItAnswers() = runBlocking {

@@ -8,6 +8,18 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,7 +87,15 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     val colors = Apple.colors
     Section(header = "关于", inset = 58.dp, footer = "Token 与配置只保存在本机，不会备份或上传。" +
         if (s.runtimeMode == RuntimeMode.MODULE) "更新应用后，可在「运行模式」中一键更新模块。" else "") {
-        ListRow("版本", value = c.updater.version, leading = { IconTile(Icons.Rounded.Info, colors.gray) })
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(Brush.verticalGradient(listOf(Color(0xFFFFCB45), Color(0xFFFFA81F)))),
+                contentAlignment = Alignment.Center) {
+                Image(painterResource(R.drawable.ic_launcher_foreground), null, modifier = Modifier.requiredSize(50.dp))
+            }
+            Text("去他妈的鸡险", style = Apple.body, color = colors.label, modifier = Modifier.weight(1f))
+            Text(c.updater.version, style = Apple.body.copy(fontFeatureSettings = "tnum"), color = colors.secondary)
+        }
         when (val u = state) {
             is UpdateState.Available -> {
                 ListRow("新版本 ${u.update.version}", subtitle = Updates.summary(u.update.release.notes, 4).ifBlank { null },
@@ -104,14 +124,32 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     var edit by remember { mutableStateOf(false) }
     var remove by remember { mutableStateOf(false) }
     val colors = Apple.colors
-    Section(header = "Po0 账户", footer = "Token 加密保存在本机。检查连接只读取白名单，不会修改。") {
-        ListRow("Token", value = when { s.demo -> "演示模式"; credential -> "已保存"; else -> "未添加" },
-            leading = { IconTile(Glyphs.Key, colors.accent) })
-        if (credential && !s.demo) ListRow("上次连接", value = if (s.lastSuccess > 0) time(s.lastSuccess) else "尚未连接")
-        if (credential && !s.demo && s.endpoint != Po0Credential.DEFAULT_ENDPOINT) ListRow("服务器", value = s.endpoint.removePrefix("https://"))
-        ActionRow(if (busy) "正在检查…" else "检查连接", enabled = !busy && (credential || s.demo), loading = busy, onClick = c::checkConnection)
-        ActionRow(if (credential) "更换 Token" else "添加 Token", enabled = !busy) { edit = true }
-        if (credential) ActionRow("移除连接", color = colors.red, enabled = !busy) { remove = true }
+    val connected = credential && !s.demo && s.lastSuccess > 0
+    Panel(header = "Po0 账户", footer = "Token 加密保存在本机。检查连接只读取白名单，不会修改。") {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(colors.yolk.copy(alpha = if (colors.dark) 0.22f else 0.16f)),
+                contentAlignment = Alignment.Center) { Icon(Glyphs.Key, null, tint = colors.yolk, modifier = Modifier.size(24.dp)) }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(when { s.demo -> "演示模式"; !credential -> "尚未连接"; connected -> "已连接"; else -> "Token 已保存" },
+                    style = Apple.title.copy(fontWeight = FontWeight.Bold), color = colors.label)
+                Text(when {
+                    s.demo -> "不会连接真实平台"
+                    !credential -> "粘贴 Token 或官方接口链接即可"
+                    else -> (if (s.lastSuccess > 0) "上次连接 ${time(s.lastSuccess)}" else "尚未连接") +
+                        if (s.endpoint != Po0Credential.DEFAULT_ENDPOINT) " · ${s.endpoint.removePrefix("https://")}" else ""
+                }, style = Apple.footnote, color = colors.secondary)
+            }
+            Dot(when { s.authBlocked -> colors.red; connected -> colors.green; else -> colors.gray })
+        }
+        Spacer(Modifier.height(18.dp))
+        if (credential || s.demo) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PrimaryButton(if (busy) "正在检查…" else "检查连接", c::checkConnection, Modifier.weight(1f), enabled = !busy, loading = busy)
+            PrimaryButton(if (credential) "更换 Token" else "添加 Token", { edit = true }, Modifier.weight(1f), enabled = !busy, tinted = true)
+        } else PrimaryButton("添加 Token", { edit = true }, enabled = !busy, icon = Glyphs.Key)
+        if (credential) Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+            Text("移除连接", style = Apple.subhead.copy(fontWeight = FontWeight.Medium), color = if (busy) colors.tertiary else colors.red,
+                modifier = Modifier.clip(RoundedCornerShape(10.dp)).pressable({ remove = true }, !busy).padding(horizontal = 14.dp, vertical = 8.dp))
+        }
     }
     if (edit) TokenDialog(onDismiss = { edit = false }) { c.saveToken(it); edit = false }
     if (remove) IosAlert("移除连接？", { remove = false }, message = "将删除本机的 Token 和槽位配置并暂停同步。Po0 上的白名单不受影响。",
@@ -148,16 +186,27 @@ internal fun LazyListScope.po0Items(s: State, c: Controller, credential: Boolean
     }
     fun offer(update: Boolean) { c.moduleInstaller.reset(); sheet = update }
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Section(header = "运行模式", footer = "一般保持标准模式即可。模块增强需要 root，仅用于在后台更及时地触发检查。") {
-            CheckRow("标准模式", s.runtimeMode == RuntimeMode.STANDARD, subtitle = "无需 root", enabled = !busy) { c.runtimeMode(RuntimeMode.STANDARD) }
-            CheckRow("模块增强", s.runtimeMode == RuntimeMode.MODULE, subtitle = "Magisk / KernelSU", enabled = !busy) {
-                // An installed module works even when older, so switch and suggest the update; without one, offer to install.
-                if (module != null) { c.runtimeMode(RuntimeMode.MODULE); if (outdated) offer(update = true) } else offer(update = false)
+        Column {
+            Text("运行模式", style = Apple.footnote.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.secondary,
+                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ModeCard("标准模式", "无需 root", Glyphs.Shield, Apple.colors.green, s.runtimeMode == RuntimeMode.STANDARD, !busy, Modifier.weight(1f)) {
+                    c.runtimeMode(RuntimeMode.STANDARD)
+                }
+                ModeCard("模块增强", "Magisk / KernelSU", Glyphs.Module, Apple.colors.indigo, s.runtimeMode == RuntimeMode.MODULE, !busy, Modifier.weight(1f)) {
+                    // An installed module works even when older, so switch and suggest the update; without one, offer to install.
+                    if (module != null) { c.runtimeMode(RuntimeMode.MODULE); if (outdated) offer(update = true) } else offer(update = false)
+                }
             }
+            Text("一般保持标准模式即可。模块增强需要 root，仅用于在后台更及时地触发检查。", style = Apple.footnote, color = Apple.colors.secondary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp))
         }
         Section(footer = if (details) "模块会监听底层网络与路由器出口（仅局域网查询），并让本应用免于电池优化。" +
             "它不保存 Token，也不保证常驻；小米 HyperOS 需允许本应用自启动。要停用，请切回标准模式，或在管理器中禁用模块。" else null) {
             ListRow("状态", subtitle = status, value = if (checkedAt > 0) time(checkedAt) else null)
+            module?.stats?.let { m ->
+                ListRow("模块累计", subtitle = "唤醒应用 ${compactCount(m.wakes)} 次（拉起 ${compactCount(m.revived)} 次）· 更新 IP ${compactCount(m.ipUpdates)} 次 · 网络变化 ${compactCount(m.networkChanges)} 次")
+            }
             if (s.runtimeMode == RuntimeMode.MODULE && outdated) {
                 ListRow("模块有新版本", subtitle = "当前 ${module?.versionName ?: "旧版"}，与应用 ${c.updater.version} 配套的版本可用",
                     titleColor = Apple.colors.orange)
@@ -291,5 +340,31 @@ private fun readableEvidence(text: String) = text.replace(Regex("\\b1\\d{12}\\b"
             },
             actions = if (error != null || count == 0) listOf(AlertAction("好", preferred = true) { peer = null })
                 else listOf(AlertAction("取消") { peer = null }, AlertAction("导入", preferred = true) { c.importPeers(p); peer = null }))
+    }
+}
+
+/** One of the two run modes, as a card: what it is, what it needs, and a ring that fills when chosen. */
+@Composable private fun ModeCard(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color,
+                                 selected: Boolean, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val colors = Apple.colors
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val border by androidx.compose.animation.animateColorAsState(if (selected) colors.ink else colors.separator, label = "border")
+    Column(modifier.fillMaxHeight().springPress(source, enabled).clip(RoundedCornerShape(Apple.radius)).background(colors.card)
+        .border(if (selected) 2.dp else 1.dp, border, RoundedCornerShape(Apple.radius))
+        .selectable(selected, source, indication = null, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+        .padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(tint.copy(alpha = if (colors.dark) 0.22f else 0.13f)),
+                contentAlignment = Alignment.Center) { Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp)) }
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(22.dp).clip(CircleShape).background(if (selected) colors.ink else Color.Transparent)
+                .border(1.5.dp, if (selected) colors.ink else colors.tertiary, CircleShape), contentAlignment = Alignment.Center) {
+                if (selected) Icon(Icons.Rounded.Check, null, tint = colors.onInk, modifier = Modifier.size(15.dp))
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = Apple.headline, color = if (enabled) colors.label else colors.tertiary)
+            Text(subtitle, style = Apple.footnote, color = colors.secondary)
+        }
     }
 }

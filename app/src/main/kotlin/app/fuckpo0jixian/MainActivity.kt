@@ -32,11 +32,16 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.fuckpo0jixian.core.*
 import app.fuckpo0jixian.core.State
@@ -54,6 +59,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // The tab bar paints its own fade down to the system bar; no gray scrim under 3-button navigation.
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         Screenshots.apply(this)
         val controller = (application as FuckPo0JiXianApp).controller
         setContent { FuckPo0JiXianTheme { FuckPo0JiXian(controller) {
@@ -104,6 +111,9 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     val scrolls = List(tabs.size) { rememberLazyListState() }
     val colors = Apple.colors
     val background = rememberBackgroundLocation()
+    val alive by c.runtime.alive.collectAsStateWithLifecycle()
+    val moduleDown = s.runtimeMode == RuntimeMode.MODULE && !s.demo && !s.paused && alive == false
+    LaunchedEffect(s.runtimeMode, s.paused) { if (s.runtimeMode == RuntimeMode.MODULE) c.refreshRuntime() }
     ManualDialog(c, busy)
     UpdateSheet(c.updater)
     var apNotice by rememberSaveable { mutableStateOf<String?>(null) }
@@ -124,12 +134,12 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
                         verticalArrangement = Arrangement.spacedBy(24.dp)) {
                         item(key = "title-$page") {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                LargeTitle(if (page == 0) "去他妈的鸡险" else tabs[page].title)
+                                if (page == 0) BrandHeader(s.deviceName) else LargeTitle(tabs[page].title)
                                 if (s.demo) Box(Modifier.padding(start = 4.dp)) { Capsule("演示数据 · 不连接平台", colors.orange) }
                             }
                         }
                         when (page) {
-                            0 -> homeItems(s, busy, network, currentKey, credential, c, configure = { page = 2 }) { page = 1 }
+                            0 -> homeItems(s, busy, network, currentKey, credential, moduleDown, c, configure = { page = 2 }) { page = 1 }
                             1 -> slotItems(s, c, busy, background, edit = { editing = it }, confirmAp = { apNotice = it }) { page = 2 }
                             2 -> po0Items(s, c, credential, busy, requestNotifications)
                             3 -> recordItems(s, history, c)
@@ -156,205 +166,54 @@ private val tabs = listOf(Tab("概览", Icons.Rounded.Home), Tab("白名单", Ic
     }
 }
 
+/** The overview's masthead: the chick mark, the name, and which device this is. */
+@Composable private fun BrandHeader(device: String) {
+    val c = Apple.colors
+    Row(Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Brush.verticalGradient(listOf(Color(0xFFFFCB45), Color(0xFFFFA81F)))),
+            contentAlignment = Alignment.Center) {
+            androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(R.drawable.ic_launcher_foreground), null,
+                modifier = Modifier.requiredSize(66.dp))
+        }
+        Column {
+            Text("去他妈的鸡险", style = Apple.title.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp), color = c.label)
+            Text(device.ifBlank { "本机" }, style = Apple.footnote, color = c.secondary)
+        }
+    }
+}
+
+/**
+ * A floating capsule of four tabs over the page; the selected one sits on a pill that glides between them.
+ */
 @Composable private fun TabBar(page: Int, badge: Int, select: (Int) -> Unit) {
     val c = Apple.colors
-    Column(Modifier.fillMaxWidth().background(c.bar)) {
-        HorizontalDivider(thickness = 0.5.dp, color = c.separator)
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(56.dp).selectableGroup()) {
-            tabs.forEachIndexed { i, tab ->
-                val tint = if (page == i) c.accent else c.gray
-                Column(Modifier.weight(1f).fillMaxHeight().testTag("tab-$i")
-                    .selectable(page == i, remember { MutableInteractionSource() }, indication = null, role = Role.Tab) { select(i) },
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Box {
-                        Icon(tab.icon, null, tint = tint, modifier = Modifier.size(26.dp))
-                        if (badge == i) Box(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-1).dp).size(9.dp).background(c.red, CircleShape))
+    Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(c.background.copy(alpha = 0f), c.background)))
+        .navigationBarsPadding().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 10.dp), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(Modifier.widthIn(max = 520.dp).fillMaxWidth().height(64.dp)
+            .shadow(if (c.dark) 0.dp else 18.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.18f), spotColor = Color.Black.copy(alpha = 0.18f))
+            .clip(CircleShape).background(if (c.dark) c.segment.copy(alpha = 0.92f) else c.card)
+            .then(if (c.dark) Modifier.border(0.5.dp, c.separator, CircleShape) else Modifier).padding(6.dp)) {
+            val width = maxWidth / tabs.size
+            val offset by animateDpAsState(width * page, spring(dampingRatio = 0.78f, stiffness = 500f), label = "pill")
+            Box(Modifier.offset(x = offset).width(width).fillMaxHeight().clip(CircleShape)
+                .background(c.ink.copy(alpha = if (c.dark) 0.12f else 0.07f)))
+            Row(Modifier.fillMaxSize().selectableGroup()) {
+                tabs.forEachIndexed { i, tab ->
+                    val tint by animateColorAsState(if (page == i) c.label else c.gray, label = "tab")
+                    val source = remember { MutableInteractionSource() }
+                    Column(Modifier.weight(1f).fillMaxHeight().testTag("tab-$i").springPress(source)
+                        .selectable(page == i, source, indication = null, role = Role.Tab) { select(i) },
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Box {
+                            Icon(tab.icon, null, tint = tint, modifier = Modifier.size(23.dp))
+                            if (badge == i) Box(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-1).dp).size(8.dp).background(c.red, CircleShape))
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(tab.title, style = Apple.caption.copy(fontWeight = if (page == i) FontWeight.SemiBold else FontWeight.Medium), color = tint)
                     }
-                    Spacer(Modifier.height(2.dp))
-                    Text(tab.title, style = Apple.caption, color = tint)
                 }
             }
         }
     }
-}
-
-/** Big, calm status: what the app is doing, then the two facts people check (exit and network). */
-@Composable private fun StatusHero(icon: ImageVector, tint: Color, title: String, subtitle: String, busy: Boolean,
-                                   facts: List<Pair<String, String>>) {
-    val colors = Apple.colors
-    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Box(Modifier.size(60.dp), contentAlignment = Alignment.Center) {
-                if (busy) {
-                    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(1f, 1.35f,
-                        infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "scale")
-                    Box(Modifier.size(56.dp * pulse).background(tint.copy(alpha = 0.10f), CircleShape))
-                }
-                Box(Modifier.size(56.dp).background(tint.copy(alpha = 0.15f), CircleShape), contentAlignment = Alignment.Center) {
-                    AnimatedContent(icon, label = "icon") { Icon(it, null, tint = tint, modifier = Modifier.size(30.dp)) }
-                }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                AnimatedContent(title, label = "title", transitionSpec = { fadeIn() togetherWith fadeOut() }) {
-                    Text(it, style = Apple.largeTitle.copy(fontSize = Apple.title.fontSize * 1.25f, lineHeight = Apple.title.lineHeight * 1.2f), color = colors.label)
-                }
-                Text(subtitle, style = Apple.subhead, color = colors.secondary)
-            }
-        }
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            facts.forEach { (label, value) ->
-                Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(colors.fill.copy(alpha = colors.fill.alpha * 0.7f))
-                    .padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(label, style = Apple.footnote, color = colors.secondary)
-                    Text(value, style = Apple.headline.copy(fontFeatureSettings = "tnum"), color = colors.label, maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                }
-            }
-        }
-    }
-}
-
-/** "刚刚", "5 分钟前", else the time. */
-internal fun ago(value: Long): String {
-    if (value <= 0) return "尚未检查"
-    val minutes = (System.currentTimeMillis() - value) / 60_000
-    return when { minutes < 1 -> "刚刚检查"; minutes < 60 -> "$minutes 分钟前检查"; minutes < 24 * 60 -> "${minutes / 60} 小时前检查"; else -> "${time(value)} 检查" }
-}
-
-private fun LazyListScope.homeItems(s: State, busy: Boolean, network: String, currentKey: String?,
-                                    credential: Boolean, c: Controller, configure: () -> Unit, manage: () -> Unit) {
-    item(key = "home-status") {
-        val colors = Apple.colors
-        val wifi by c.wifiObservation.collectAsState()
-        val stale = !s.demo && s.snapshot != null && s.networkKey != currentKey
-        val auto = s.mode == Mode.AUTO && s.layout != null
-        val (icon, tint, title) = when {
-            busy -> Triple(Glyphs.Sync, colors.accent, "正在检查")
-            s.globalBlock != null || s.authBlocked -> Triple(Icons.Rounded.Warning, colors.red, "需要处理")
-            s.paused -> Triple(Glyphs.Pause, colors.orange, "已暂停")
-            auto -> Triple(Glyphs.Shield, colors.green, "自动同步中")
-            else -> Triple(Icons.Rounded.Info, colors.accent, "仅查询")
-        }
-        val subtitle = when {
-            busy -> "请稍候"
-            stale -> "网络已切换，等待检查"
-            s.lastCheck <= 0 -> statusText(s.status)
-            else -> "${statusText(s.status)} · ${ago(s.lastCheck)}"
-        }
-        val identity = wifiIdentityText(s, wifi)
-        Section {
-            StatusHero(icon, tint, title, subtitle, busy, listOf(
-                (if (stale) "上次出口" else "当前出口") to (s.snapshot?.current?.value ?: "未检查"),
-                "网络" to (if (s.demo) "模拟网络" else listOfNotNull(networkText(network), identity).joinToString(" · "))))
-        }
-    }
-    item(key = "home-actions") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PrimaryButton("立即检查", c::check, Modifier.weight(1f), enabled = !busy && !s.paused, loading = busy)
-            PrimaryButton(if (s.paused) "恢复检查" else "暂停检查", { c.pause(!s.paused) }, Modifier.width(128.dp), tinted = true)
-        }
-    }
-    if (s.globalBlock != null) item(key = "protection-review") {
-        Section(footer = "只读取 Po0，不重发上次写入。核对通过后仍暂停；其他设备槽的更新可通过，未知记录变化或丢失仍受保护。账户或文件恢复异常请先处理原因，勿清数据。") {
-            ActionRow("只读复核保护状态", enabled = !busy, onClick = c::reviewProtection)
-        }
-    }
-    item(key = "home-capacity") {
-        val snap = s.snapshot
-        Section(header = "名额", footer = if (snap == null) "连接 Po0 并检查后显示。" else null) {
-            if (snap == null) {
-                ListRow("尚未获取", titleColor = Apple.colors.secondary)
-                if (!credential && !s.demo) ActionRow("连接 Po0", onClick = configure)
-            } else {
-                CapacitySummary(s)
-                ListRow("查看槽位", value = "${s.layout?.slots?.count { it.writer == Writer.LOCAL && it.authorized } ?: 0} 个由本机管理",
-                    chevron = true, onClick = manage)
-            }
-        }
-    }
-}
-
-private fun LazyListScope.recordItems(s: State, history: List<FamiliarNetwork>, c: Controller) {
-    item(key = "rec-status") {
-        Section(header = "检查") {
-            ListRow("状态", value = statusText(s.status))
-            ListRow("上次检查", value = time(s.lastCheck))
-            // Only worth a row when something is actually holding checks back.
-            if (s.failures > 0) ListRow("连续失败 ${s.failures} 次", value = "下次 ${time(s.nextAllowed)}", titleColor = Apple.colors.orange)
-            if (s.authBlocked) ListRow("Token 无效，请在设置中更新", titleColor = Apple.colors.red)
-        }
-    }
-    item(key = "rec-exit") {
-        Section(header = "出口", footer = "国内出口经国内 STUN 服务器查询（走 Wi-Fi / 移动数据本身，不经过 VPN），不通时改用 ip.3322.net；与 Po0 识别一致才会写入。") {
-            val d = s.domesticExit
-            val current = s.snapshot?.current
-            ListRow("国内出口", subtitle = d?.let { "${if (it.source == ProbeSource.STUN) "STUN" else "ip.3322.net"} · ${time(it.time)}" }
-                ?: statusText(s.probeStatus), value = d?.ipv4 ?: "未查询")
-            ListRow("Po0 识别", value = current?.value ?: "未检查", trailing = if (d != null && current != null) {
-                { Capsule(if (d.cidr == current) "一致" else "不一致", if (d.cidr == current) Apple.colors.green else Apple.colors.orange) }
-            } else null)
-            ActionRow("查询国内出口", enabled = !s.demo && !s.paused, onClick = c::checkDomestic)
-        }
-    }
-    item(key = "rec-history") {
-        var all by rememberSaveable { mutableStateOf(false) }
-        Section(header = "常用网络", footer = "近 7 天的使用统计，只作参考。", modifier = Modifier.animateContentSize()) {
-            if (history.isEmpty()) ListRow("暂无记录", titleColor = Apple.colors.secondary)
-            history.take(if (all) 20 else 3).forEach { n ->
-                ListRow(n.cidr.value, subtitle = "${n.days} 天 · ${n.visits} 次 · ${time(n.lastSeen)}",
-                    trailing = if (n.common) { { Capsule("常用", Apple.colors.green) } } else null)
-            }
-            if (history.size > 3) ActionRow(if (all) "收起" else "显示全部 ${minOf(history.size, 20)} 个") { all = !all }
-        }
-    }
-    item(key = "rec-events") {
-        var all by rememberSaveable { mutableStateOf(false) }
-        val events = s.events.filter { it.time >= System.currentTimeMillis() - c.policy.retentionMs }.takeLast(30).reversed()
-        Section(header = "事件", modifier = Modifier.animateContentSize()) {
-            if (events.isEmpty()) ListRow("暂无事件", titleColor = Apple.colors.secondary)
-            events.take(if (all) 30 else 3).forEach { e -> ListRow(statusText(e.code), value = time(e.time)) }
-            if (events.size > 3) ActionRow(if (all) "收起" else "显示全部 ${events.size} 条") { all = !all }
-        }
-    }
-    item(key = "rec-clear") {
-        var confirm by remember { mutableStateOf(false) }
-        Section(footer = "只反映 Po0 与国内查询站看到的出口，不代表所有线路都可用。") {
-            ActionRow("清空记录", color = Apple.colors.red) { confirm = true }
-        }
-        if (confirm) IosAlert("清空记录？", { confirm = false }, message = "清空网络历史和事件，不影响设置与白名单。", actions = listOf(
-            AlertAction("取消") { confirm = false },
-            AlertAction("清空", destructive = true) { c.clearHistory(); confirm = false }))
-    }
-    item(key = "rec-debug") { DebugExportSection(c) }
-}
-
-/** Last on the records page: the detailed log for troubleshooting, addresses cut to /16. */
-@Composable private fun DebugExportSection(c: Controller) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = rememberCoroutineScope()
-    var open by remember { mutableStateOf(false) }
-    var working by remember { mutableStateOf(false) }
-    fun deliver(share: Boolean) {
-        open = false; working = true
-        scope.launch {
-            try {
-                val text = c.debugText()
-                if (share) context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND)
-                    .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, text)
-                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "去他妈的鸡险 · 调试信息"), "导出调试信息"))
-                else {
-                    context.getSystemService(android.content.ClipboardManager::class.java)
-                        .setPrimaryClip(android.content.ClipData.newPlainText("FuckPo0JiXian", text))
-                    c.feedback.value = "已复制调试信息"
-                }
-            } finally { working = false }
-        }
-    }
-    Section(footer = "包含详细的运行记录，便于排查问题。IP 只保留前两段，不含 Token。") {
-        ActionRow("导出调试信息", loading = working) { open = true }
-    }
-    if (open) IosAlert("导出调试信息", { open = false },
-        message = "包含设置、每次检查与网络变化、模块记录等运行细节。IP 只保留前两段，Wi-Fi 名称以标记代替，不含 Token。",
-        actions = listOf(AlertAction("分享", preferred = true) { deliver(true) }, AlertAction("复制") { deliver(false) },
-            AlertAction("取消") { open = false }))
 }

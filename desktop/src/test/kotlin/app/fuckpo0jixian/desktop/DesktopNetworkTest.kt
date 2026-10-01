@@ -63,7 +63,10 @@ class DesktopNetworkTest {
         assertEquals(WifiSecurity.GATEWAY, o.security)
         assertTrue(o.usable(1_000, link.key))
         assertNull(link.copy(gatewayMac = null).observation(1_000))
-        assertEquals("other", link.copy(gatewayMac = null).kind)
+        // Still a router network, just not identifiable: checks say so instead of "nothing to update".
+        assertEquals("lan", link.copy(gatewayMac = null).kind)
+        assertTrue(link.copy(gatewayMac = null).unidentified)
+        assertEquals("other", link.copy(gatewayMac = null, gatewayIp = null).kind)
     }
 
     @Test fun windowsSkipsClashTunDefaultRoute() {
