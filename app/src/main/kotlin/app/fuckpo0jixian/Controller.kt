@@ -323,7 +323,13 @@ class Controller(private val context: Context) {
         }
         val source = ProbeSource.IP3322
         try { DomesticProbe.parse(NetworkTransport(network).execute("GET", source.url), now, key, source) }
-        catch (e: Exception) { httpsOnly.remove(key); throw e } // Neither path works: try STUN first again next time.
+        catch (e: Exception) {
+            // HTTPS failed too (a router's fake-IP DNS can send it into a proxy): if STUN was skipped, ask it after all
+            // rather than leave this network without any exit. Po0 must still agree before anything is written.
+            val skipped = httpsOnly.remove(key) != null
+            if (skipped) Stun.query(network)?.let { return@withContext DomesticExit(it, now, key, ProbeSource.STUN) }
+            throw e
+        }
     }
     suspend fun runCheck(manual: Boolean, observeOnly: Boolean = false, enhanced: Boolean = false,
                          fallback: Boolean = false): String = withContext(Dispatchers.Main.immediate) {
@@ -346,6 +352,7 @@ class Controller(private val context: Context) {
     }
     private suspend fun runCheckOnMain(manual: Boolean, observeOnly: Boolean, enhanced: Boolean, fallback: Boolean): String {
         if (!gate.tryLock()) { if (!manual) pendingBackground = true; return "BUSY" }
+        val started = System.currentTimeMillis()
         val thisRequest = currentCoroutineContext()[Job]
         requestJob = thisRequest
         busy.value = true
@@ -400,13 +407,26 @@ class Controller(private val context: Context) {
             val code = withContext(Dispatchers.IO) { engine.check(platform, session, manual, observeOnly) }
             if (!observeOnly) manualPreview.value = null
             val after = store.load()
-            // Po0 sees another /24 than STUN just reported on this network: ask over HTTPS here from now on.
+            // Po0 sees another /24 than STUN reported on this network. A STUN answer from before this check may simply be
+            // out of date (a router redialling twice in a minute): ask STUN again first. Only an answer that disagrees with
+            // Po0 at the same moment means STUN takes another path here; then ask over HTTPS on this network for a while.
             val exit = after.domesticExit
             val seen = after.snapshot?.current
             if (!s.demo && exit?.source == ProbeSource.STUN && exit.networkKey == session.key && after.networkKey == session.key &&
-                seen != null && exit.cidr != seen && httpsOnly.put(session.key, SystemClock.elapsedRealtime()) == null) {
-                LifeLog.add("PROBE stun ${exit.ipv4} disagrees with Po0 ${seen.value}; https on this network")
-                scheduleCheck("catch-up")
+                seen != null && exit.cidr != seen) {
+                val again = when {
+                    exit.time >= started -> exit
+                    session.stillCurrent() && LocalCheck.probeAllowed(store.load(), session.key, System.currentTimeMillis()) &&
+                        updateDomestic(n!!) -> store.load().domesticExit
+                    else -> null
+                }
+                if (again?.cidr == seen) {
+                    LifeLog.add("PROBE exit changed since the earlier STUN answer; now ${again.ipv4}")
+                    scheduleCheck("catch-up")
+                } else if (again?.source == ProbeSource.STUN && httpsOnly.put(session.key, SystemClock.elapsedRealtime()) == null) {
+                    LifeLog.add("PROBE stun ${again.ipv4} disagrees with Po0 ${seen.value}; https on this network")
+                    scheduleCheck("catch-up")
+                }
             }
             feedback.value = statusText(code)
             previewSlot?.let { number ->

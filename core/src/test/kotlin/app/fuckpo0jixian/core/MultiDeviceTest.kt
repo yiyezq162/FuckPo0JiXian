@@ -59,6 +59,29 @@ class MultiDeviceTest {
         assertEquals(newHome, slot(st, 0).baseline)
     }
 
+    /** The router redialled twice within a minute: the phone wrote the middle exit, which this device saw itself. */
+    @Test fun peerWriteOfThisNetworksPreviousExitIsReplacedRightAway() = runTest {
+        val st = MemoryStore(state(shared = true))
+        val middle = Cidr("198.18.7.0/24")
+        val f = Fake(snap(middle, listOf(Entry(home, 0), Entry(office, 1), Entry(phone, 2))))
+        // This device sees the middle exit but does not write it (say its Wi-Fi was not confirmed yet).
+        check(st, f, null, kind = "wifi")
+        assertTrue(f.writes.isEmpty())
+        clock += 30_000; st.state = st.state.copy(nextAllowed = 0)
+        f.snap = snap(newHome, listOf(Entry(middle, 0), Entry(office, 1), Entry(phone, 2)))
+        assertEquals("SLOT_UPDATED", check(st, f)); assertEquals(listOf(0), f.writes)
+        assertEquals(newHome, slot(st, 0).baseline)
+    }
+
+    @Test fun manualUpdateIsNotHeldByTheQuietPeriod() = runTest {
+        val st = MemoryStore(state(shared = true))
+        val f = Fake(snap(newHome, listOf(Entry(Cidr("198.18.7.0/24"), 0), Entry(office, 1), Entry(phone, 2))))
+        assertEquals("SHARED_RECENT", check(st, f)); assertTrue(f.writes.isEmpty())
+        clock += 30_000
+        assertEquals("SLOT_UPDATED", Engine(st, { clock }).check(f, NetworkSession("n", "wifi", f.snap.current, wifi()) { true }, manual = true))
+        assertEquals(listOf(0), f.writes)
+    }
+
     @Test fun sharedSlotAlreadyCurrentAfterPeerWriteNeedsNoPost() = runTest {
         val st = MemoryStore(state(shared = true))
         val f = Fake(snap(newHome, listOf(Entry(newHome, 0), Entry(office, 1), Entry(phone, 2))))
