@@ -49,8 +49,20 @@ public final class Main {
     }
     private static Context context;
     private static Handler handler;
-    private static String certificate, instance = "", generation = "", ticket = "", lastStatus = "STARTING";
-    private static long issued, lastWake;
+    private static String certificate, instance = "", generation = "", lastStatus = "STARTING";
+    private static long lastWake;
+    /** A one-use wake ticket: when it was issued and whether the APK was running then (a claim counts a revival). */
+    private static final class Ticket {
+        final long issued; final boolean revived;
+        Ticket(long issued, boolean revived) { this.issued = issued; this.revived = revived; }
+    }
+    /**
+     * Wakes not yet claimed, oldest first. A newer wake no longer replaces an older one: the APK may still be starting
+     * for the older one (after a soft reboot two wakes 3s apart left both unclaimed, and the module read START_FAILED).
+     */
+    private static final java.util.LinkedHashMap<String, Ticket> tickets = new java.util.LinkedHashMap<>();
+    /** Keeps the "activity" binder proxy, and with it the death link, alive: a collected proxy drops its link. */
+    private static IBinder system;
     private static boolean wakeFailed;
     private static String recoveryEpoch = "";
     private static FileObserver moduleObserver, configObserver;
@@ -68,9 +80,8 @@ public final class Main {
     private static final java.util.Set<Network> physical = new java.util.HashSet<>();
     private static String observed = "", primaryKind = "none";
     private static Stats stats;
-    /** The last ticket the APK claimed, and whether the APK was running before that wake; its RESULT is counted once. */
-    private static String claimed = "";
-    private static boolean pendingRevived, ticketRevived;
+    /** Tickets the APK claimed and has not reported on yet; each RESULT is counted once. */
+    private static final java.util.LinkedHashSet<String> claimed = new java.util.LinkedHashSet<>();
 
     // In-memory timeline for the APK's debug log: never written to disk, gone with the process.
     private static final java.util.ArrayDeque<String> timeline = new java.util.ArrayDeque<>();
@@ -131,13 +142,11 @@ public final class Main {
         context = (Context) at.getMethod("getSystemContext").invoke(thread);
         // A soft reboot restarts system_server but not the kernel, and this root process survives it with a dead
         // context: it then answered every call with UNAVAILABLE and kept the socket, so the next boot's helper could
-        // not start (seen on an OPPO with KernelSU, 4 failed starts). Leave as soon as the system goes away.
-        IBinder system = (IBinder) Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "activity");
+        // not start (seen on an OPPO with KernelSU, 4 failed starts). Leave as soon as the system goes away. The proxy
+        // is held in a field: once garbage collected its death link is gone, and 0.9.1 survived a soft reboot that way.
+        system = (IBinder) Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "activity");
         if (system == null) throw new IllegalStateException("SYSTEM_NOT_READY");
-        system.linkToDeath(() -> {
-            android.util.Log.w("FuckPo0JiXianHelper", "SYSTEM_RESTARTED");
-            Runtime.getRuntime().halt(SYSTEM_RESTARTED);
-        }, 0);
+        system.linkToDeath(Main::systemGone, 0);
         handler = new Handler(Looper.getMainLooper());
         LocalServerSocket server;
         try { server = new LocalServerSocket(SOCKET); }
@@ -198,6 +207,11 @@ public final class Main {
         Looper.loop();
         lock.release(); lockFile.close();
     }
+    private static void systemGone() {
+        android.util.Log.w("FuckPo0JiXianHelper", "SYSTEM_RESTARTED");
+        Runtime.getRuntime().halt(SYSTEM_RESTARTED);
+    }
+
     /** The boot the helper holding the socket reports, or null when none answers. */
     private static Integer holderBoot() {
         try (LocalSocket socket = new LocalSocket()) {
@@ -335,7 +349,7 @@ public final class Main {
         StringBuilder digest = new StringBuilder();
         for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes)) digest.append(String.format("%02x", b & 255));
         if (!certificate.equals(digest.toString())) throw new SecurityException();
-        if (packageStamp != p.lastUpdateTime) { packageStamp = p.lastUpdateTime; epoch = UUID.randomUUID().toString(); ticket = ""; wakeFailed = false; }
+        if (packageStamp != p.lastUpdateTime) { packageStamp = p.lastUpdateTime; epoch = UUID.randomUUID().toString(); tickets.clear(); wakeFailed = false; }
         return p;
     }
     private static synchronized String state() {
@@ -357,16 +371,18 @@ public final class Main {
             }
             String next = data.getString("instance");
             if (!next.matches("[a-f0-9-]{36}")) return "IDENTITY";
-            if (!instance.equals(next)) { instance = next; ticket = ""; }
+            if (!instance.equals(next)) { instance = next; tickets.clear(); }
             String nextGeneration = data.getString("generation");
-            if (!generation.equals(nextGeneration)) { generation = nextGeneration; epoch = UUID.randomUUID().toString(); ticket = ""; wakeFailed = false; }
+            if (!generation.equals(nextGeneration)) { generation = nextGeneration; epoch = UUID.randomUUID().toString(); tickets.clear(); wakeFailed = false; }
             keepAliveWanted = data.optBoolean("keepAlive", true);
-            if (!data.getBoolean("enabled")) { ticket = ""; return "STOPPED"; }
+            if (!data.getBoolean("enabled")) { tickets.clear(); return "STOPPED"; }
             if (lastStatus.equals("CALLBACK_FAILED")) return lastStatus;
             return "READY";
         } catch (Exception e) { return "UNAVAILABLE"; }
     }
     private static synchronized void lifecycle() {
+        // Backstop for the death link, on the existing minute tick: a helper must never outlive the system it serves.
+        if (!system.isBinderAlive()) systemGone();
         String s = state();
         if (!s.equals(lastStatus)) note("STATE", lastStatus + " -> " + s);
         if (s.equals("READY")) keepAlive();
@@ -416,16 +432,17 @@ public final class Main {
             }
             return;
         }
-        lastWake = now; issued = now; ticket = UUID.randomUUID().toString();
-        pendingRevived = !appRunning();
-        final String pending = ticket;
+        lastWake = now;
+        final String pending = UUID.randomUUID().toString();
+        tickets.put(pending, new Ticket(now, !appRunning()));
+        if (tickets.size() > 4) tickets.remove(tickets.keySet().iterator().next());
         // Some OEMs reject an otherwise valid start while am still exits normally.
         // Only the APK claiming this one-use ticket confirms entry. This one-shot
         // timer is not a poll, wake lock, or proof of an HTTP request completing.
         handler.postDelayed(() -> {
             synchronized (Main.class) {
-                if (state().equals("READY") && pending.equals(ticket)) {
-                    wakeFailed = true; ticket = "";
+                if (state().equals("READY") && tickets.remove(pending) != null) {
+                    wakeFailed = true;
                     android.util.Log.w("FuckPo0JiXianHelper", "WAKE_UNCONFIRMED");
                     note("WAKE", "unconfirmed after 30s");
                 }
@@ -433,7 +450,7 @@ public final class Main {
         }, 30_000);
         try {
             java.lang.Process process = new ProcessBuilder("/system/bin/am", "start-foreground-service", "--user", "0",
-                "-n", "app.fuckpo0jixian/.RuntimeSyncService", "-a", "app.fuckpo0jixian.RUNTIME_CHECK", "-f", "0x10", "--es", "ticket", ticket,
+                "-n", "app.fuckpo0jixian/.RuntimeSyncService", "-a", "app.fuckpo0jixian.RUNTIME_CHECK", "-f", "0x10", "--es", "ticket", pending,
                 "--es", "trigger", kind)
                 .redirectOutput(new File("/dev/null")).redirectError(new File("/dev/null")).start();
             if (!process.waitFor(5, TimeUnit.SECONDS)) { process.destroy(); wakeFailed = true; note("WAKE", kind + " am timeout"); }
@@ -490,17 +507,21 @@ public final class Main {
                 else if (action.equals("STATUS")) reply = s.equals("READY") ? (wakeFailed ? "START_FAILED" : "READY:" + epoch) : s;
                 else if (!client.equals(instance)) reply = "IDENTITY";
                 else if (action.equals("EVENTS")) reply = events(claim.matches("\\d{1,18}") ? Long.parseLong(claim) : 0);
-                else if (action.equals("CLAIM") && s.equals("READY") && !ticket.isEmpty() && ticket.equals(claim) &&
-                    SystemClock.elapsedRealtime() - issued < 30_000) {
-                    reply = "CHECK:" + epoch; claimed = ticket; ticketRevived = pendingRevived; ticket = ""; wakeFailed = false;
-                    stats.wakes++; if (ticketRevived) stats.revived++; stats.save();
-                    note("CLAIM", "APK entered" + (ticketRevived ? " (was not running)" : ""));
+                else if (action.equals("CLAIM") && s.equals("READY") && tickets.containsKey(claim) &&
+                    SystemClock.elapsedRealtime() - tickets.get(claim).issued < 30_000) {
+                    Ticket entered = tickets.get(claim);
+                    // The APK is in: wakes issued before this one are covered by it. Later ones still need their own claim.
+                    java.util.Iterator<String> older = tickets.keySet().iterator();
+                    while (older.hasNext()) { boolean self = older.next().equals(claim); older.remove(); if (self) break; }
+                    reply = "CHECK:" + epoch; claimed.add(claim); wakeFailed = false;
+                    while (claimed.size() > 4) claimed.remove(claimed.iterator().next());
+                    stats.wakes++; if (entered.revived) stats.revived++; stats.save();
+                    note("CLAIM", "APK entered" + (entered.revived ? " (was not running)" : ""));
                     handler.post(() -> describe(lastStatus));
                 }
                 // After a module wake the APK reports how its check ended ("<ticket>:<code>"), once per claimed ticket.
-                else if (action.equals("RESULT") && !claimed.isEmpty() && claim.startsWith(claimed + ":")) {
-                    String code = claim.substring(claimed.length() + 1);
-                    claimed = "";
+                else if (action.equals("RESULT") && claim.length() > 37 && claim.charAt(36) == ':' && claimed.remove(claim.substring(0, 36))) {
+                    String code = claim.substring(37);
                     if (code.equals("SLOT_UPDATED") || code.equals("RECOVERED_VERIFIED")) {
                         stats.ipUpdates++; stats.save(); handler.post(() -> describe(lastStatus));
                     }
