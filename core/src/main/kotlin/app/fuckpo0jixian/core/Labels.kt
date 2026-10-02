@@ -16,7 +16,7 @@ fun statusText(code: String): String = when (code) {
     "SLOT_UPDATED" -> "已更新并核对"
     "EXTERNAL_CHANGE" -> "检测到外部修改，本机不接管"
     "PEER_UPDATED" -> "其他设备已更新"
-    "SHARED_RECENT" -> "其他设备刚改过此槽，稍后再判断"
+    "SHARED_RECENT" -> "其他设备刚改过此槽，暂不自动改回；手动更新可覆盖"
     "IMPORT_INVALID" -> "剪贴板里不是有效的导出数据"
     "IMPORT_SAME_DEVICE" -> "这是本机导出的数据"
     "IMPORT_DEVICE_NAME" -> "导出数据缺少设备名称"
@@ -80,4 +80,25 @@ fun statusText(code: String): String = when (code) {
     "NETWORK_CONNECT_FAILED" -> "连接失败，请稍后检查"
     "NETWORK_DNS_FAILED" -> "域名解析失败，请稍后检查"
     else -> "检查未完成（${code.take(48)}）"
+}
+
+/**
+ * What a slot page says about the latest change made elsewhere ([ManagedSlot.changedAt]): what happened, and what this
+ * device does about it now, with the end of the co-managed quiet period when one is running. Null when nothing changed.
+ */
+fun changeNotice(slot: ManagedSlot, now: Long, time: (Long) -> String, policy: Policy = Policy()): Pair<String, String>? {
+    if (slot.changedAt <= 0) return null
+    val at = time(slot.changedAt)
+    return when {
+        slot.writer == Writer.LOCAL && slot.shared && slot.authorized -> {
+            val until = slot.changedAt + policy.sharedQuietMs
+            val left = until - now
+            "$at 其他设备改了此槽" to if (left > 0)
+                "为免两台设备来回改，本机 ${time(until)} 前不自动改它（还剩 ${(left + 59_999) / 60_000} 分钟）。手动更新可立即覆盖。"
+            else "等待已结束，本机按自己的出口判断，需要时自动更新。"
+        }
+        slot.writer == Writer.LOCAL -> "$at 此槽被别处改了" to "本机写的值被替换，已停止自动更新此槽。核对后重新授权即可恢复。"
+        slot.writer == Writer.OTHER_DEVICE -> "$at ${slot.owner.ifBlank { "其他设备" }}更新了此槽" to "由它负责，本机只记录变化。"
+        else -> "$at 此槽在平台上被改动" to "不是本机写的，本机不会动它。"
+    }
 }

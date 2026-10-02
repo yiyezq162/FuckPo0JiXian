@@ -357,8 +357,15 @@ private val attention = setOf("SLOT_CONFLICT", "SLOT_VERIFY_FAILED", "IDENTITY_A
                     Section { ListRow(message, titleColor = colors.red,
                         leading = { Icon(Icons.Rounded.Warning, null, tint = colors.red, modifier = Modifier.size(22.dp)) }) }
                 }
-                Section(header = "名称", footer = "平台编号 ${original.number} · 当前记录 ${remote?.value ?: "空"}" +
-                    if (original.changedAt > 0) " · ${time(original.changedAt)} 发现他处改动" else "") {
+                // Ticks the countdown of the co-managed quiet period.
+                val now by produceState(System.currentTimeMillis(), original.changedAt) {
+                    while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(20_000) }
+                }
+                changeNotice(original, now, ::time)?.let { (title, detail) ->
+                    Section { ListRow(title, subtitle = detail, leading = {
+                        Icon(Icons.Rounded.Warning, null, tint = colors.orange, modifier = Modifier.size(22.dp)) }) }
+                }
+                Section(header = "名称", footer = "平台编号 ${original.number} · 当前记录 ${remote?.value ?: "空"}") {
                     Box(Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
                         if (name.isEmpty()) Text("例如：家、公司、这台手机", style = Apple.body, color = colors.tertiary)
                         BasicTextField(name, { name = it.take(40) }, Modifier.fillMaxWidth().testTag("slot-name"), singleLine = true,

@@ -82,6 +82,15 @@ class MultiDeviceTest {
         assertEquals(listOf(0), f.writes)
     }
 
+    @Test fun changeNoticeCountsDownTheQuietPeriodAndMentionsManualUpdate() {
+        val slot = layout(shared = true).slots.first().copy(changedAt = clock)
+        val (title, during) = changeNotice(slot, clock + 3 * 60_000, { "t$it" })!!
+        assertEquals("t$clock 其他设备改了此槽", title)
+        assertTrue("还剩 27 分钟" in during && "手动更新可立即覆盖" in during, during)
+        assertFalse("还剩" in changeNotice(slot, clock + Policy().sharedQuietMs, { "t" })!!.second)
+        assertNull(changeNotice(slot.copy(changedAt = 0), clock, { "t" }))
+    }
+
     @Test fun sharedSlotAlreadyCurrentAfterPeerWriteNeedsNoPost() = runTest {
         val st = MemoryStore(state(shared = true))
         val f = Fake(snap(newHome, listOf(Entry(newHome, 0), Entry(office, 1), Entry(phone, 2))))

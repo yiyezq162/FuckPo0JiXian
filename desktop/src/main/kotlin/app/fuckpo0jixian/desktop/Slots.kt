@@ -196,11 +196,17 @@ internal fun purposeText(p: SlotPurpose) = when (p) { SlotPurpose.FIXED -> "固�
                     }
                 }
             }
-            if (original.changedAt > 0 || original.status in attention || error != null) Card {
+            // Ticks the countdown of the co-managed quiet period.
+            val now by produceState(System.currentTimeMillis(), original.changedAt) {
+                while (true) { value = System.currentTimeMillis(); kotlinx.coroutines.delay(20_000) }
+            }
+            val notice = changeNotice(original, now, ::time)
+            if (notice != null || original.status in attention || error != null) Card {
                 error?.let { SettingRow(it, icon = Glyph.Warning, iconTint = colors.red, titleColor = colors.red) }
-                if (original.status in attention) SettingRow(desktopText(original.status), icon = Glyph.Warning, iconTint = colors.orange)
-                if (original.changedAt > 0) SettingRow("${time(original.changedAt)} 发现他处改动", subtitle = "平台上的记录被其他设备或外部改过",
-                    icon = Glyph.Clock, iconTint = colors.orange)
+                // The notice below already says what SHARED_RECENT means, with its end time.
+                if (original.status in attention && !(notice != null && original.status == "SHARED_RECENT"))
+                    SettingRow(desktopText(original.status), icon = Glyph.Warning, iconTint = colors.orange)
+                notice?.let { (title, detail) -> SettingRow(title, subtitle = detail, icon = Glyph.Clock, iconTint = colors.orange) }
             }
             Group(footer = when {
                 purpose == SlotPurpose.RESERVED -> "留作他用，不会自动更新。"
