@@ -108,7 +108,9 @@ internal class LayoutSync(private val store: StateStore, private val now: () -> 
             s = s.copy(layout = layout.copy(slots = updated))
             if (observeOnly || (s.mode == Mode.OBSERVE && permit == null))
                 return finish(if (before.contains(before.current)) "PRESENT_CURRENT_CHECK" else "OBSERVED_MISSING")
-            if (network.observedCidr != before.current) return finish("EGRESS_UNVERIFIED")
+            // Without a verified exit nothing is written; when Po0's view is already listed there is nothing to write either.
+            if (network.observedCidr != before.current)
+                return finish(if (permit == null && before.contains(before.current)) "PRESENT_CURRENT_CHECK" else "EGRESS_UNVERIFIED")
             val decision = if (permit != null) {
                 if (permit.account != s.accountContext || permit.version != s.layout!!.version || permit.networkKey != network.key ||
                     now() > permit.expires || permit.before != before ||

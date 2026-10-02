@@ -15,18 +15,32 @@ import java.security.SecureRandom
 internal object Stun {
     private val random = SecureRandom()
 
-    fun query(localIp: String): String? {
+    /** The server that answered last, kept for when every resolver hands out a proxy's fake addresses. */
+    @Volatile private var lastGood: InetAddress? = null
+
+    /**
+     * Names go to AliDNS / DNSPod first, then to the router ([gatewayIp]): a router running OpenClash can hijack queries to
+     * public resolvers and answer with fake 198.18.x addresses while its own DNS still gives real ones (seen at home).
+     */
+    fun query(localIp: String, gatewayIp: String? = null): String? {
         val local = InetAddress.getByName(localIp)
+        val resolvers = listOfNotNull("223.5.5.5", "119.29.29.29", gatewayIp)
+        val tried = mutableSetOf<InetAddress>()
         for (host in StunCodec.servers) {
-            val address = listOf("223.5.5.5", "119.29.29.29").firstNotNullOfOrNull { dns ->
+            val address = resolvers.firstNotNullOfOrNull { dns ->
                 runCatching { Dns.query(host, dns, local) }.getOrNull()?.firstOrNull { !DesktopNetwork.tunAddress(it.hostAddress) }
             }
             if (address == null) { BoundTransport.record(host, "stun dns", null, null); continue }
-            val result = runCatching { ask(address, local) }
-            BoundTransport.record(host, "stun " + if (result.getOrNull() != null) "ok" else "failed", null, result.exceptionOrNull())
-            result.getOrNull()?.let { return it }
+            tried += address
+            ask(host, address, local)?.let { return it }
         }
-        return null
+        return lastGood?.takeIf { it !in tried }?.let { ask("last stun", it, local) }
+    }
+
+    private fun ask(host: String, address: InetAddress, local: InetAddress): String? {
+        val result = runCatching { ask(address, local) }
+        BoundTransport.record(host, "stun " + if (result.getOrNull() != null) "ok" else "failed", null, result.exceptionOrNull())
+        return result.getOrNull()?.also { lastGood = address }
     }
 
     private fun ask(server: InetAddress, local: InetAddress): String? = DatagramChannel.open().socket().use { s ->

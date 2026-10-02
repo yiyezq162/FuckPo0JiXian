@@ -19,7 +19,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
                         /** Cheap in-process change hint; when it moves, [network] is read again. */
                         private val hint: () -> String = DesktopNetwork::fingerprint,
                         /** Public IPv4 seen directly from the LAN interface, or null to fall back to the HTTPS probe. */
-                        private val stun: (localIp: String) -> String? = Stun::query,
+                        private val stun: (link: DesktopLink) -> String? = { Stun.query(it.localIp!!, it.gatewayIp) },
                         private val now: () -> Long = System::currentTimeMillis,
                         /** tunnel = true only for Po0: see BoundTransport. The exit probe is always direct. */
                         private val transportFor: (localIp: String, tunnel: Boolean) -> Transport = ::BoundTransport) {
@@ -171,7 +171,7 @@ class DesktopController(val store: FileStore = FileStore(), val vault: TokenVaul
      * that Po0, asked the same way, agreed with). Only the STUN exit is proof of the direct path.
      */
     private suspend fun observeExit(l: DesktopLink, now: Long): DomesticExit {
-        withContext(Dispatchers.IO) { stun(l.localIp!!) }?.let { stunMissed = false; return DomesticExit(it, now, l.key, ProbeSource.STUN) }
+        withContext(Dispatchers.IO) { stun(l) }?.let { stunMissed = false; return DomesticExit(it, now, l.key, ProbeSource.STUN) }
         if (!stunMissed) { stunMissed = true; activity.add("PROBE stun unanswered on ${l.iface}; exit via https, writes wait for stun") }
         return DomesticProbe.parse(transportFor(l.localIp!!, false).execute("GET", ProbeSource.IP3322.url), now, l.key, ProbeSource.IP3322)
     }
