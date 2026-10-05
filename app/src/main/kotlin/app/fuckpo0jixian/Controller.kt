@@ -111,7 +111,7 @@ class Controller(private val context: Context) {
         scope.launch { delay(30_000); if (scheduleEnabled()) Wake.enable(context, fallbackMs()) }
         if (Build.VERSION.SDK_INT >= 31) runCatching { WifiIdentityObserver.registerPhysical(cm, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { underlying = network; changed() }
-            override fun onLost(network: Network) { if (underlying == network) underlying = null; changed() }
+            override fun onLost(network: Network) { if (underlying == network) underlying = null; unvalidatedSince.remove(network); changed() }
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = changed()
             override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) = changed()
         }) } else runCatching { cm.registerNetworkCallback(WifiIdentityObserver.PHYSICAL, object : ConnectivityManager.NetworkCallback() {
@@ -140,14 +140,31 @@ class Controller(private val context: Context) {
     private fun legacyPhysical(): Network? {
         val active = cm.activeNetwork
         if (cm.getNetworkCapabilities(active)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true) return active
-        val candidates = cm.allNetworks.mapNotNull { n -> cm.getNetworkCapabilities(n)?.let { n to it } }.filter { (_, c) ->
-            !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
+        val candidates = cm.allNetworks.mapNotNull { n -> cm.getNetworkCapabilities(n)?.let { n to it } }.filter { (n, c) ->
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND) && trusted(n, c)
         }
         return (candidates.firstOrNull { it.second.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) } ?: candidates.firstOrNull())?.first
     }
-    private fun physical(): Network? = current()?.takeIf { n ->
-        cm.getNetworkCapabilities(n)?.let { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) && !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) } == true
+    private fun physical(): Network? = current()?.takeIf { n -> cm.getNetworkCapabilities(n)?.let { trusted(n, it) } == true }
+    /** When each physical network was first seen without Android validating it; see [trusted]. */
+    private val unvalidatedSince = java.util.concurrent.ConcurrentHashMap<Network, Long>()
+    /**
+     * A physical network with internet that Android validated, or that has stayed unvalidated for
+     * [UNVALIDATED_GRACE_MS]. Under an always-on VPN some ROMs leave mobile data unvalidated for good although it
+     * carries traffic (seen on OPPO: every check skipped as "no direct network" until a reboot). The check itself
+     * proves the path; a captive portal never counts.
+     */
+    private fun trusted(n: Network, c: NetworkCapabilities): Boolean {
+        if (c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) || !c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) return false
+        if (c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) { unvalidatedSince.remove(n); return true }
+        val now = SystemClock.elapsedRealtime()
+        val since = unvalidatedSince.getOrPut(n) {
+            // Nothing else fires when the grace runs out on a quiet network: look again then.
+            scope.launch { delay(UNVALIDATED_GRACE_MS + 100); changed() }
+            now
+        }
+        return now - since >= UNVALIDATED_GRACE_MS
     }
     /** The transport as the engine sees it ([NetworkKind]); [kind] is only the label people read. */
     private fun transport(n: Network?): String = cm.getNetworkCapabilities(n)?.let {
@@ -364,7 +381,10 @@ class Controller(private val context: Context) {
                 return "RATE_LIMITED"
             }
             val n = physical()
-            if (!s.demo && n == null) { feedback.value = statusText("UNTRUSTED_PATH"); return "UNTRUSTED_PATH" }
+            if (!s.demo && n == null) {
+                val code = if (current()?.let { unvalidatedSince.containsKey(it) } == true) "NETWORK_SETTLING" else "UNTRUSTED_PATH"
+                feedback.value = statusText(code); return code
+            }
             if (!s.demo && !withContext(Dispatchers.IO) { directPath(n!!) }) { feedback.value = statusText("VPN_NO_BYPASS"); return "VPN_NO_BYPASS" }
             val wifi = if (s.demo) demoWifi() else if (transport(n) == NetworkKind.WIFI) wifiObserver.observe(n!!) else null
             wifiObservation.value = wifi
@@ -611,6 +631,8 @@ class Controller(private val context: Context) {
     private companion object {
         /** How long a network stays on the HTTPS exit probe after STUN went unanswered there. */
         const val HTTPS_ONLY_MS = 30 * 60_000L
+        /** How long a physical network may stay unvalidated before checks run on it anyway; the helper uses the same. */
+        const val UNVALIDATED_GRACE_MS = 20_000L
     }
     private fun notifyIssue(code: String) {
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return

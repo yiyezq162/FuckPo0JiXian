@@ -3,6 +3,7 @@ package app.fuckpo0jixian.core
 /** People-facing text for engine and UI codes, shared by the Android and desktop apps. */
 fun statusText(code: String): String = when (code) {
     "UNTRUSTED_PATH" -> "没有可直连的网络，已跳过本次检查"
+    "NETWORK_SETTLING" -> "网络刚切换，系统还没确认可用，20 秒内自动检查"
     "VPN_NO_BYPASS" -> "VPN 不允许直连：请在 VPN 的分应用代理中绕过本应用"
     "UNMANAGED" -> "未授权本机管理"
     "AUTHORIZED_LOCAL" -> "已授权，等待检查"

@@ -79,6 +79,14 @@ public final class Main {
     private static ConnectivityManager cm;
     private static final java.util.Set<Network> physical = new java.util.HashSet<>();
     private static String observed = "", primaryKind = "none";
+    /**
+     * When each network was first seen without Android validating it. Under an always-on VPN some ROMs leave mobile
+     * data unvalidated for good although it carries traffic (seen on OPPO: no wake until a reboot). After this long
+     * such a network counts anyway; the APK's check proves the path. Same grace as the APK's.
+     */
+    private static final java.util.Map<Network, Long> unvalidatedSince = new java.util.HashMap<>();
+    private static final long UNVALIDATED_GRACE_MS = 20_000;
+    private static final Runnable reevaluate = Main::evaluate;
     private static Stats stats;
     /** Tickets the APK claimed and has not reported on yet; each RESULT is counted once. */
     private static final java.util.LinkedHashSet<String> claimed = new java.util.LinkedHashSet<>();
@@ -180,7 +188,7 @@ public final class Main {
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build();
             cm.registerNetworkCallback(request, new ConnectivityManager.NetworkCallback() {
                 public void onAvailable(Network n) { physical.add(n); evaluate(); }
-                public void onLost(Network n) { physical.remove(n); evaluate(); }
+                public void onLost(Network n) { physical.remove(n); unvalidatedSince.remove(n); evaluate(); }
                 public void onCapabilitiesChanged(Network n, NetworkCapabilities caps) { physical.add(n); evaluate(); }
                 // Same network, new local address or IPv6 prefix (mobile re-attach, router redial): the exit likely moved.
                 public void onLinkPropertiesChanged(Network n, android.net.LinkProperties link) { physical.add(n); evaluate(); }
@@ -268,6 +276,18 @@ public final class Main {
         android.net.LinkProperties link = best == null ? null : cm.getLinkProperties(best);
         boolean wifi = bestCaps != null && bestCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
         boolean validated = bestCaps != null && bestCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        boolean settled = false;
+        if (validated || best == null || bestCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+            if (best != null) unvalidatedSince.remove(best);
+        } else {
+            long now = SystemClock.elapsedRealtime();
+            Long since = unvalidatedSince.get(best);
+            if (since == null) unvalidatedSince.put(best, since = now);
+            settled = now - since >= UNVALIDATED_GRACE_MS;
+            handler.removeCallbacks(reevaluate);
+            if (!settled) handler.postDelayed(reevaluate, since + UNVALIDATED_GRACE_MS - now + 100);
+        }
+        boolean usable = validated || settled;
         String kind = best == null ? "none" : wifi ? "wifi" : bestCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular" : "other";
         StringBuilder v4 = new StringBuilder(), v6 = new StringBuilder();
         java.net.InetAddress router = null;
@@ -290,15 +310,16 @@ public final class Main {
                     router = route.getGateway();
         }
         gateway.watch(wifi && validated ? best : null, wifi && validated ? router : null);
-        String key = best + ":" + kind + ":" + validated + ":" + v4 + ":" + v6;
+        String trust = validated ? "true" : settled ? "settled" : "false";
+        String key = best + ":" + kind + ":" + trust + ":" + v4 + ":" + v6;
         if (key.equals(observed)) return;
         // The first evaluation after start is where we are, not a change.
-        boolean change = !observed.isEmpty() && best != null && validated;
+        boolean change = !observed.isEmpty() && best != null && usable;
         observed = key; primaryKind = kind;
         if (change) synchronized (Main.class) { stats.networkChanges++; stats.save(); describe(lastStatus); }
-        note("NET", kind + (best == null ? "" : " validated=" + validated + " v4=" + v4 + " v6=" + v6 +
+        note("NET", kind + (best == null ? "" : " validated=" + trust + " v4=" + v4 + " v6=" + v6 +
             (router != null ? " gw=" + router.getHostAddress() : "")));
-        if (best != null && validated) { handler.removeCallbacks(wake); handler.postDelayed(wake, 500); }
+        if (best != null && usable) { handler.removeCallbacks(wake); handler.postDelayed(wake, 500); }
     }
 
     private static void screen(android.hardware.display.DisplayManager displays) {
