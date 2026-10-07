@@ -101,6 +101,9 @@ jobs:
         run: ./gradlew --no-daemon --max-workers=2 :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
 
       - name: Package APKs and module
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: sh scripts/package.sh
 
       - name: Check signing certificate

@@ -33,8 +33,11 @@ directory. Cloud setup retains its original command. No product/signature/test
 gate was changed; full NAS Android acceptance is pending the corrected run.
 
 Corrected SDK run37565761130 passed real core/lint/APK build (two APK outputs),
-but module packaging found missing native `zip`; minimal NAS job dependency
-installation now supplies it and checks shasum. Its failure-report upload also
+but helper javac rejected Chinese source under default US-ASCII. Only the
+packaging step now uses C.UTF-8 LANG/LC_ALL, with no host-wide locale change.
+Read-only tool inspection additionally found missing native `zip` before the
+package could reach it; minimal NAS job dependency installation now supplies
+it and checks shasum. Its failure-report upload also
 reset the FinalizeArtifact connection. NAS uploads now get one action-process
 only direct HTTPS retry; successful build requires a finalized artifact.
 Retry artifact names still end in the source SHA, preserving the unchanged tag
