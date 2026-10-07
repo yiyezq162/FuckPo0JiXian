@@ -1,5 +1,13 @@
 # FuckPo0JiXian dedicated NAS CI
 
+Verified source `f30f882`: [run37566777890](https://github.com/yiyezq162/FuckPo0JiXian/actions/runs/37566777890)
+completed overall SUCCESS. Actual `nas-ci-fuckpo0jixian` passed Java DE egress,
+SDK/core tests/lint/APK/module build and finalized its primary build artifact.
+The macOS/Windows native packaging and Android emulator jobs also passed on
+cloud; three downloadable build artifacts exist. Release was SKIPPED (main,
+not a tag). This is build/test evidence, not publication, phone installation,
+long-term operation or real Po0 account/whitelist acceptance.
+
 Public repository `yiyezq162/FuckPo0JiXian` owns Runner/container/Compose
 project `nas-ci-fuckpo0jixian`, selector
 `self-hosted, Linux, X64, nas-fuckpo0jixian`. Runtime
@@ -30,7 +38,7 @@ failed because the pinned setup action defaults to retired package `tools`.
 The NAS action now explicitly requests platform-tools/SDK36/build-tools36.0.0;
 its own versioned sdkmanager handles installation, not a presumed `latest`
 directory. Cloud setup retains its original command. No product/signature/test
-gate was changed; full NAS Android acceptance is pending the corrected run.
+gate was changed; final corrected acceptance is recorded above.
 
 Corrected SDK run37565761130 passed real core/lint/APK build (two APK outputs),
 but helper javac rejected Chinese source under default US-ASCII. Only the
@@ -42,7 +50,8 @@ reset the FinalizeArtifact connection. NAS uploads now get one action-process
 only direct HTTPS retry; successful build requires a finalized artifact.
 Retry artifact names still end in the source SHA, preserving the unchanged tag
 draft-Release download/version/signer gates. Java/Gradle/job proxies and all
-cloud-native/emulator steps are unchanged. Full corrected acceptance pending.
+cloud-native/emulator steps are unchanged. Final corrected acceptance is
+recorded above; subsequent docs-only commits retain tested source f30f882.
 
 ## Public fork safety
 
