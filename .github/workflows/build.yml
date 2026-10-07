@@ -35,6 +35,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Require native module packaging tools on NAS
+        if: runner.environment == 'self-hosted'
+        run: |
+          if ! command -v zip; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zip
+          fi
+          command -v zip
+          command -v shasum
+
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -112,16 +122,58 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v7
+        id: build_primary
+        continue-on-error: ${{ runner.environment == 'self-hosted' }}
         with:
           name: FuckPo0JiXian-${{ steps.meta.outputs.version }}-${{ github.sha }}
           path: dist/*
           retention-days: 30
+          if-no-files-found: error
+
+      - name: Retry NAS build upload (action-only direct HTTPS)
+        if: always() && runner.environment == 'self-hosted' && steps.build_primary.outcome == 'failure'
+        id: build_retry
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/.github/scripts/ci-artifact-direct.cjs
+        with:
+          # End in the source SHA so the unchanged draft-Release download pattern matches.
+          name: FuckPo0JiXian-${{ steps.meta.outputs.version }}-retry2-${{ github.sha }}
+          path: dist/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Require finalized NAS build artifact
+        if: always() && runner.environment == 'self-hosted' && steps.meta.outcome == 'success'
+        env:
+          PRIMARY: ${{ steps.build_primary.outcome }}
+          RETRY: ${{ steps.build_retry.outcome }}
+        run: |
+          if [[ "$PRIMARY" != success && "$RETRY" != success ]]; then
+            echo 'No finalized NAS build artifact.' >&2
+            exit 1
+          fi
 
       - name: Keep lint report on failure
         if: failure()
+        id: reports_primary
+        continue-on-error: ${{ runner.environment == 'self-hosted' }}
         uses: actions/upload-artifact@v7
         with:
           name: reports-${{ github.sha }}
+          path: |
+            app/build/reports/
+            core/build/reports/
+          retention-days: 7
+
+      - name: Retry NAS failure report upload (action-only direct HTTPS)
+        if: always() && runner.environment == 'self-hosted' && steps.reports_primary.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        env:
+          NODE_OPTIONS: --require ${{ github.workspace }}/.github/scripts/ci-artifact-direct.cjs
+        with:
+          name: reports-retry2-${{ github.sha }}
           path: |
             app/build/reports/
             core/build/reports/

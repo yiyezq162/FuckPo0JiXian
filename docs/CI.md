@@ -32,6 +32,15 @@ its own versioned sdkmanager handles installation, not a presumed `latest`
 directory. Cloud setup retains its original command. No product/signature/test
 gate was changed; full NAS Android acceptance is pending the corrected run.
 
+Corrected SDK run37565761130 passed real core/lint/APK build (two APK outputs),
+but module packaging found missing native `zip`; minimal NAS job dependency
+installation now supplies it and checks shasum. Its failure-report upload also
+reset the FinalizeArtifact connection. NAS uploads now get one action-process
+only direct HTTPS retry; successful build requires a finalized artifact.
+Retry artifact names still end in the source SHA, preserving the unchanged tag
+draft-Release download/version/signer gates. Java/Gradle/job proxies and all
+cloud-native/emulator steps are unchanged. Full corrected acceptance pending.
+
 ## Public fork safety
 
 Owner-approved approval policy is `all_external_contributors`, not only
