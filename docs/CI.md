@@ -25,6 +25,13 @@ CPU6/RAM6GiB+swap2GiB are ceilings, not reserved capacity; one job per Runner.
 Registrations and mutable cache/work are independent; only immutable image
 layers and the proxy service are shared. No cross-project scheduling hook.
 
+Initial NAS run37565439815/dc69437 passed the Java DE exit gate, but SDK setup
+failed because the pinned setup action defaults to retired package `tools`.
+The NAS action now explicitly requests platform-tools/SDK36/build-tools36.0.0;
+its own versioned sdkmanager handles installation, not a presumed `latest`
+directory. Cloud setup retains its original command. No product/signature/test
+gate was changed; full NAS Android acceptance is pending the corrected run.
+
 ## Public fork safety
 
 Owner-approved approval policy is `all_external_contributors`, not only

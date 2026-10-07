@@ -65,8 +65,12 @@ jobs:
       - name: Install Android command-line tools on NAS
         if: runner.environment == 'self-hosted'
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK packages
+        if: runner.environment != 'self-hosted'
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
       - name: Restore signing key
