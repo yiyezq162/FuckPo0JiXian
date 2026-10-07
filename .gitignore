@@ -20,6 +20,7 @@ module/certificate.sha256
 /docs/*
 !/docs/INSTALL.md
 !/docs/TESTING.md
+!/docs/CI.md
 !/docs/SLOTS.md
 !/docs/IMPLEMENTATION.md
 *.pem

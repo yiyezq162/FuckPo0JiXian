@@ -1,4 +1,5 @@
-# Builds, tests and packages FuckPo0JiXian on GitHub's servers.
+# Trusted main/tag/manual Android builds use the repository-dedicated NAS Runner.
+# Every PR, Android emulator and native macOS/Windows job stays on GitHub cloud.
 # - Every push / pull request: run core tests + lint, build APKs and the module ZIP, and the macOS / Windows
 #   desktop installers (each on its own system, jpackage cannot cross-build); keep them as downloadable artifacts.
 # - Pushing a tag like v0.5.0-preview: additionally creates a *draft* GitHub Release with all those files attached.
@@ -25,12 +26,14 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' || vars.CI_RUNNER == 'github') && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64", "nas-fuckpo0jixian"]') }}
     timeout-minutes: 40
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v6
         with:
@@ -38,6 +41,30 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v5  # v6 adds proprietary caching terms
+
+      - name: Verify Java also uses the NAS proxy
+        if: runner.environment == 'self-hosted'
+        run: |
+          cat > "$RUNNER_TEMP/ProxyCheck.java" <<'JAVA'
+          import java.net.*;
+          import java.io.*;
+          public class ProxyCheck {
+            public static void main(String[] args) throws Exception {
+              var c = new URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection();
+              c.setConnectTimeout(15000); c.setReadTimeout(15000);
+              try (var r = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
+                var country = r.lines().filter(x -> x.startsWith("loc=")).findFirst().orElse("");
+                if (!country.equals("loc=DE")) throw new IllegalStateException("Expected DE Java proxy exit");
+                System.out.println("Java/SDK/Gradle proxy exit: DE");
+              }
+            }
+          }
+          JAVA
+          java "$RUNNER_TEMP/ProxyCheck.java"
+
+      - name: Install Android command-line tools on NAS
+        if: runner.environment == 'self-hosted'
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Install Android SDK packages
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
@@ -57,7 +84,7 @@ jobs:
           fi
 
       - name: Test, lint and build
-        run: ./gradlew --no-daemon :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
+        run: ./gradlew --no-daemon --max-workers=2 :core:test :app:assembleDebug :app:assemblePreview :app:lintPreview
 
       - name: Package APKs and module
         run: sh scripts/package.sh

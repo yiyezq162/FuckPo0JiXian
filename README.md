@@ -163,7 +163,7 @@ sh scripts/test-emulator.sh
 
 ### 自动构建与发布
 
-GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在每次推送和 Pull Request 时运行核心测试与 Lint，构建 APK 和模块 ZIP，在模拟器上跑 Android 界面测试，并分别在 macOS / Windows 上测试和打包桌面端，结果可在 Actions 页面下载（保留 30 天）。
+GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）会在推送和 PR 时测试、Lint、构建 APK 和模块 ZIP。可信 main/tag/手动 Android 构建用**本项目专用 NAS Runner `nas-ci-fuckpo0jixian`**（标签 `nas-fuckpo0jixian`）；所有 PR、Android 模拟器与 macOS/Windows 原生打包仍用 GitHub 云 Runner。工作区、缓存和凭据不共用，普通开发不重注册。审批、回退和边界见 [CI 说明](docs/CI.md)，结果可在 Actions 下载（保留 30 天）。
 
 发布新版本：
 
