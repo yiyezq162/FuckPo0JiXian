@@ -1,4 +1,4 @@
-# Trusted main/tag/manual Android builds use the repository-dedicated NAS Runner.
+# Trusted main/tag/manual Android builds use the repository-dedicated Bero Runner.
 # Every PR, Android emulator and native macOS/Windows job stays on GitHub cloud.
 # - Every push / pull request: run core tests + lint, build APKs and the module ZIP, and the macOS / Windows
 #   desktop installers (each on its own system, jpackage cannot cross-build); keep them as downloadable artifacts.
@@ -26,7 +26,7 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ (github.event_name == 'pull_request' || vars.CI_RUNNER == 'github') && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64", "nas-fuckpo0jixian"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request' || vars.CI_RUNNER == 'github') && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64", "ci-fuckpo0jixian"]') }}
     timeout-minutes: 40
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -35,7 +35,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Require native module packaging tools on NAS
+      - name: Require native module packaging tools on Bero
         if: runner.environment == 'self-hosted'
         run: |
           if ! command -v zip; then
@@ -52,7 +52,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5  # v6 adds proprietary caching terms
 
-      - name: Verify Java also uses the NAS proxy
+      - name: Verify Java also has direct Bero egress
         if: runner.environment == 'self-hosted'
         run: |
           cat > "$RUNNER_TEMP/ProxyCheck.java" <<'JAVA'
@@ -64,15 +64,15 @@ jobs:
               c.setConnectTimeout(15000); c.setReadTimeout(15000);
               try (var r = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
                 var country = r.lines().filter(x -> x.startsWith("loc=")).findFirst().orElse("");
-                if (!country.equals("loc=DE")) throw new IllegalStateException("Expected DE Java proxy exit");
-                System.out.println("Java/SDK/Gradle proxy exit: DE");
+                if (!country.equals("loc=DE")) throw new IllegalStateException("Expected DE Java egress");
+                System.out.println("Java/SDK/Gradle direct exit: DE");
               }
             }
           }
           JAVA
           java "$RUNNER_TEMP/ProxyCheck.java"
 
-      - name: Install Android command-line tools on NAS
+      - name: Install Android command-line tools on Bero
         if: runner.environment == 'self-hosted'
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
@@ -133,7 +133,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Retry NAS build upload (action-only direct HTTPS)
+      - name: Retry Bero build upload (action-only direct HTTPS)
         if: always() && runner.environment == 'self-hosted' && steps.build_primary.outcome == 'failure'
         id: build_retry
         continue-on-error: true
@@ -147,14 +147,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Require finalized NAS build artifact
+      - name: Require finalized Bero build artifact
         if: always() && runner.environment == 'self-hosted' && steps.meta.outcome == 'success'
         env:
           PRIMARY: ${{ steps.build_primary.outcome }}
           RETRY: ${{ steps.build_retry.outcome }}
         run: |
           if [[ "$PRIMARY" != success && "$RETRY" != success ]]; then
-            echo 'No finalized NAS build artifact.' >&2
+            echo 'No finalized Bero build artifact.' >&2
             exit 1
           fi
 
@@ -170,7 +170,7 @@ jobs:
             core/build/reports/
           retention-days: 7
 
-      - name: Retry NAS failure report upload (action-only direct HTTPS)
+      - name: Retry Bero failure report upload (action-only direct HTTPS)
         if: always() && runner.environment == 'self-hosted' && steps.reports_primary.outcome == 'failure'
         uses: actions/upload-artifact@v7
         env:

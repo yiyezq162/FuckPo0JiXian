@@ -1,4 +1,4 @@
-# FuckPo0JiXian dedicated NAS CI
+# FuckPo0JiXian dedicated Bero CI
 
 Verified source `f30f882`: [run37566777890](https://github.com/yiyezq162/FuckPo0JiXian/actions/runs/37566777890)
 completed overall SUCCESS. Actual `nas-ci-fuckpo0jixian` passed Java DE egress,
@@ -8,30 +8,30 @@ cloud; three downloadable build artifacts exist. Release was SKIPPED (main,
 not a tag). This is build/test evidence, not publication, phone installation,
 long-term operation or real Po0 account/whitelist acceptance.
 
-Public repository `yiyezq162/FuckPo0JiXian` owns Runner/container/Compose
-project `nas-ci-fuckpo0jixian`, selector
-`self-hosted, Linux, X64, nas-fuckpo0jixian`. Runtime
-`/volume1/services/ci-fuckpo0jixian/compose.yaml`, independent home/work/cache
-volume `nas-ci-fuckpo0jixian-home`. Normal development does not register another
-Runner or use another project's home/credentials.
+Public repository `yiyezq162/FuckPo0JiXian` owns Bero Runner/container/Compose
+project `bero-ci-fuckpo0jixian`, selector
+`self-hosted, Linux, X64, ci-fuckpo0jixian`. Runtime
+`/opt/ci-runners/fuckpo0jixian/compose.yaml`, independent home/work/cache
+volume `bero-ci-fuckpo0jixian-home`. Owner-authorized October23 migration moves
+trusted CI only. Ordinary development does not register another Runner.
 
 | Job | Execution |
 | --- | --- |
-| Trusted main/tag/manual Android/core/lint/APK/module build | Dedicated NAS Linux Runner; `CI_RUNNER=github` gives cloud fallback |
-| Every PR Android build | Disposable GitHub Ubuntu, never NAS |
-| Android emulator UI tests | GitHub Ubuntu/KVM, not NAS host/VM |
-| Native desktop installers | GitHub macOS/Windows respectively; Linux cannot replace native packaging |
+| Trusted main/tag/manual Android/core/lint/APK/module build | Dedicated Bero Linux Runner; `CI_RUNNER=github` gives cloud fallback |
+| Every PR Android build | Disposable GitHub Ubuntu, never Bero |
+| Android emulator UI tests | GitHub Ubuntu/KVM |
+| Native desktop installers | GitHub macOS/Windows respectively |
 | Tag draft Release assembly | Existing GitHub cloud job; original draft/prerelease/version/signer gates retained |
 
-Workflow installs JDK17/pinned Android setup action/SDK36/build-tools36.0.0;
-NAS image is not a preinstalled-SDK promise. Gradle uses at most2workers.
-HTTP(S)/apt uses private Mihomo → BitsFlow DE, not global NAS proxy/DNS/routing.
-Runner-scoped `JAVA_TOOL_OPTIONS` supplies explicit HTTP/HTTPS JVM proxy
-properties for Gradle/SDK tools (environment HTTP_PROXY alone is insufficient);
-the workflow verifies the actual Java DE exit before SDK/build work.
-CPU6/RAM6GiB+swap2GiB are ceilings, not reserved capacity; one job per Runner.
-Registrations and mutable cache/work are independent; only immutable image
-layers and the proxy service are shared. No cross-project scheduling hook.
+Workflow installs JDK17/pinned Android setup action/SDK36/build-tools36.0.0.
+Gradle uses at most2workers. Bero uses direct HTTPS, including JVM/SDK/Gradle;
+no NAS proxy or `JAVA_TOOL_OPTIONS` is carried over. The Java DE egress check
+remains a network acceptance gate. CPU4/RAM6GiB/swap0 and lower CPU weight than
+production are limits, not reserved capacity. Each Runner has one job, an
+independent home and private network, no ports/socket/device/production mounts.
+No simultaneous full CI plus production peak-load acceptance is implied.
+NAS old registration is retired after Bero CI passes; its stopped container and
+home data are retained for recovery. Historical NAS runs below remain dated evidence.
 
 Initial NAS run37565439815/dc69437 passed the Java DE exit gate, but SDK setup
 failed because the pinned setup action defaults to retired package `tools`.
@@ -59,7 +59,7 @@ Owner-approved approval policy is `all_external_contributors`, not only
 first-time contributors. Review **workflow diffs** before approval: a fork can
 change `runs-on`; a routing expression alone is not a sandbox. Do not blindly
 approve a workflow using self-hosted labels or use `pull_request_target` to
-execute untrusted checkout on NAS. This nonprivileged container has no host
+execute untrusted checkout on Bero. This nonprivileged container has no host
 Docker socket/device/production mounts, but sudo/private-network access still
 make it a trusted-code Runner, not an untrusted-code sandbox.
 
@@ -75,7 +75,7 @@ tag workflow creates a **draft**, not an automatically public Release. This
 CI change does not authorize tags/publication or real Po0 whitelist operations.
 Tests retain TESTING.md credential-free/isolated rules.
 
-VPSManage/vault `20-服务/nas-ci-runners.md` own NAS maintenance/recovery; use
+VPSManage/vault `20-服务/bero-ci-runners.md` own Bero maintenance/recovery; use
 pinned alias/current authority, require busy=false before exact-Runner stop/
 recreation. No other Runner/service/proxy or retired NAS whitelist updater is
 changed. Never copy keys/tokens/private credential files into this repository.
