@@ -30,8 +30,8 @@ remains a network acceptance gate. CPU4/RAM6GiB/swap0 and lower CPU weight than
 production are limits, not reserved capacity. Each Runner has one job, an
 independent home and private network, no ports/socket/device/production mounts.
 No simultaneous full CI plus production peak-load acceptance is implied.
-NAS old registration is retired after Bero CI passes; its stopped container and
-home data are retained for recovery. Historical NAS runs below remain dated evidence.
+NAS old registration was retired after Bero CI passed; owner then deleted its
+source container/home without backups. Returning to NAS needs fresh deployment. Historical NAS runs below remain dated evidence.
 
 Initial NAS run37565439815/dc69437 passed the Java DE exit gate, but SDK setup
 failed because the pinned setup action defaults to retired package `tools`.
