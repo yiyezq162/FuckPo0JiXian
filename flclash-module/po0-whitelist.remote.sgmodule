@@ -1,0 +1,17 @@
+#!name=Po0 自动加白
+#!desc=把本机当前的 /24 出口钉进 Po0 白名单的一个固定槽位。先只读查询，已在名单里就不动；不在才写入，写完回读核验。切网与代理启动时立即检查，另有 10 分钟兜底。
+#!arguments=token:,slot:0,endpoint:https://124.221.69.228,dry:false
+#!arguments-desc=token：pgnfw_ 开头的 token，也可直接粘贴完整 API 链接；slot：要钉死的槽位号（0 起，留空 = po0fw 默认的 FIFO 模式）；endpoint：Po0 服务器地址；dry：只读模式，只报告「本应写入什么」，第一次验证时打开。
+
+[Rule]
+# 命门：脚本自己的请求必须走物理出口。否则 Po0 看到的是节点 IP，白名单写的是节点。
+# 换成别的服务器时，这一行的 IP 要一起改；服务器是域名时改成 DOMAIN-SUFFIX,example.com,DIRECT。
+IP-CIDR,124.221.69.228/32,DIRECT,no-resolve
+
+[Script]
+# 每 10 分钟兜底（连着 Wi-Fi 但公网 IP 静默变了，只能靠它）；切网与代理启动立即查一次。
+# 脚本走 jsDelivr（仓库合并到 main 后生效），模块本身单文件，可直接「通过URL导入」并自动更新。
+# 想离线用，改用 po0-whitelist.sgmodule + 「附件」挂 po0-whitelist.js。
+po0-check = type=cron, cronexp="*/10 * * * *", script-path=https://cdn.jsdelivr.net/gh/yiyezq162/FuckPo0JiXian@main/flclash-module/po0-whitelist.js, timeout=60, argument={{{token}}}|{{{slot}}}|{{{endpoint}}}|{{{dry}}}
+po0-on-network = type=event, event-name=network-changed, script-path=https://cdn.jsdelivr.net/gh/yiyezq162/FuckPo0JiXian@main/flclash-module/po0-whitelist.js, timeout=60, argument={{{token}}}|{{{slot}}}|{{{endpoint}}}|{{{dry}}}
+po0-on-start = type=event, event-name=engine-started, script-path=https://cdn.jsdelivr.net/gh/yiyezq162/FuckPo0JiXian@main/flclash-module/po0-whitelist.js, timeout=60, argument={{{token}}}|{{{slot}}}|{{{endpoint}}}|{{{dry}}}
