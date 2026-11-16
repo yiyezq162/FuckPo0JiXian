@@ -88,7 +88,7 @@ Po0 没有备注字段，也不区分是谁写的，所以各设备之间不通�
 
 ## FlClash 模块（可选，试用）
 
-不想装 App、又在用 FlClash 的 `-rs` 预览版？可以只导入一个模块：代理运行期间把你当前的 /24 钉进 Po0 的一个固定槽位，切网与代理启动时立即检查，另有 10 分钟兜底。
+不想装 App、又在用 FlClash 的 `-rs` 预览版？可以只导入一个模块：代理运行期间把你当前的 /24 钉进 Po0 的一个固定槽位，切网与代理启动时立即检查，另有定时兜底（默认 1 分钟，可调）。
 
 - **一键导入**：工具 → 进阶配置 → 模块 → 右上角 `+` → 通过URL导入，粘贴
   `https://cdn.jsdelivr.net/gh/yiyezq162/FuckPo0JiXian@main/flclash-module/po0-whitelist.remote.sgmodule`
