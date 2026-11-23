@@ -155,7 +155,12 @@ console.log('1) 固定槽位空着 → 写进这一格');
   const result = await run({ argument: arg(), server });
   check('一次查询 + 一次写入', server.requests.length === 2, server.requests);
   check('槽位 0 是当前 /24', server.state.whitelist.find((r) => r.slot === 0)?.ip === '203.0.113.0/24');
-  check('通知「已更新」', result.notifications[0]?.title.includes('已更新'), result.notifications);
+  check('成功通知标题', result.notifications[0]?.title === '✓ Po0 已加白', result.notifications[0]);
+  check(
+    '正文用回读的实际槽位和出口',
+    result.notifications[0]?.body === '槽位 0 · 203.0.113.0/24',
+    result.notifications[0],
+  );
 }
 
 console.log('2) 槽位里已经是当前 /24 → 只读');
@@ -244,7 +249,12 @@ console.log('11) 坑满 + 不钉槽位 → FIFO 挤掉最旧的，自愈成功')
   const result = await run({ argument: arg(TOKEN, ''), server });
   check('最旧的被挤掉', !server.state.whitelist.some((r) => r.ip === '198.51.100.0/24'), server.state.whitelist);
   check('当前 /24 进名单', server.state.whitelist.some((r) => r.ip === '203.0.113.0/24'));
-  check('通知成功', result.notifications[0]?.title.includes('已更新'), result.notifications[0]);
+  check('通知成功', result.notifications[0]?.title === '✓ Po0 已加白', result.notifications[0]);
+  check(
+    '正文带服务端实际分配的槽位',
+    result.notifications[0]?.body === '槽位 0 · 203.0.113.0/24',
+    result.notifications[0],
+  );
 }
 
 console.log('12) 坑满 + 钉了空槽位 → 400，如实报错');
@@ -311,7 +321,12 @@ console.log('18) 只读模式（dry=true）→ 只报告，不写');
   const result = await run({ argument: arg(TOKEN, '0', ENDPOINT, 'true'), server });
   check('只查询，不写', server.requests.length === 1, server.requests);
   check('白名单没变', server.state.whitelist.length === 0, server.state.whitelist);
-  check('通知「只读」', result.notifications[0]?.title.includes('只读'), result.notifications[0]);
+  check('只读预览标题', result.notifications[0]?.title === 'Po0 只读预览', result.notifications[0]);
+  check(
+    '预览说明未写入并给出计划槽位',
+    result.notifications[0]?.body === '未写入 · 槽位 0 · 203.0.113.0/24',
+    result.notifications[0],
+  );
 }
 
 console.log('19) 服务端把网段写成纯 IP → 仍按 /24 认作已在名单');

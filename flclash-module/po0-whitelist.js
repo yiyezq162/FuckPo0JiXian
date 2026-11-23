@@ -260,8 +260,8 @@ function main() {
     if (config.dry) {
       notify(
         state,
-        'Po0 自动加白（只读）',
-        currentIp + ' 不在名单；本应写入' + (config.slot === null ? '白名单' : '槽位 ' + config.slot)
+        'Po0 只读预览',
+        '未写入 · ' + (config.slot === null ? '自动分配' : '槽位 ' + config.slot) + ' · ' + currentIp
       );
       saveState(state);
       return finish();
@@ -311,11 +311,7 @@ function main() {
       state.ip = currentIp;
       state.slot = config.slot;
       state.backoffUntil = 0;
-      notify(
-        state,
-        'Po0 自动加白已更新',
-        currentIp + ' → ' + (config.slot === null ? '白名单' : '槽位 ' + config.slot)
-      );
+      notify(state, '✓ Po0 已加白', slotText(written) + ' · ' + currentIp);
       saveState(state);
       return finish();
     });
