@@ -17,7 +17,7 @@ const TOKEN = 'pgnfw_TEST';
 const ENDPOINT = 'https://po0.test';
 
 /** 假的 Po0：按 po0fw 的服务端语义——按来源 /24 幂等加白，坑满 FIFO 淘汰最旧。 */
-function backend(overrides = {}) {
+function backend(overrides = {}, faults = {}) {
   const state = {
     enabled: true,
     currentIp: '203.0.113.0/24',
@@ -55,6 +55,9 @@ function backend(overrides = {}) {
       requests.push(`${method} ${url}`);
       if (state.mode === '429') {
         return { status: 429, headers: { 'retry-after': '60' }, body: '' };
+      }
+      if (faults[method]) {
+        return faults[method];
       }
       const base = `${ENDPOINT}/api/firewall/${TOKEN}`;
       if (method === 'get' && url === base) {
@@ -99,9 +102,12 @@ function backend(overrides = {}) {
 function run({ argument, server, store = {} }) {
   return new Promise((resolve) => {
     const notifications = [];
+    const logs = [];
+    const log = (...args) => logs.push(args.map(String).join(' '));
     const pending = new Set();
     const context = vm.createContext({
       $argument: argument,
+      console: { debug: log, info: log, log, warn: log, error: log },
       $notification: { post: (title, subtitle, body) => notifications.push({ title, subtitle, body }) },
       $persistentStore: {
         read: (key) => (key in store ? store[key] : null),
@@ -119,7 +125,7 @@ function run({ argument, server, store = {} }) {
           clearTimeout(timer);
         }
         pending.clear();
-        resolve({ notifications, store });
+        resolve({ notifications, store, logs });
       },
     });
 
@@ -127,7 +133,11 @@ function run({ argument, server, store = {} }) {
       const timer = setTimeout(() => {
         pending.delete(timer);
         const answer = server.handle(method, options.url);
-        callback(null, { status: answer.status, headers: answer.headers }, answer.body);
+        if (answer.error) {
+          callback(answer.error);
+        } else {
+          callback(null, { status: answer.status, headers: answer.headers }, answer.body);
+        }
       }, 1);
       pending.add(timer);
     }
@@ -337,9 +347,101 @@ console.log('19) 服务端把网段写成纯 IP → 仍按 /24 认作已在名�
   check('按 /24 认作已在名单，提示在流动位', result.notifications[0]?.body.includes('流动位'), result.notifications[0]);
 }
 
+console.log('20) 按错误分类提示，保留 HTTP 状态码，保护错误详情');
+{
+  const privateUrl = `${ENDPOINT}/api/firewall/${TOKEN}/add?slot=0`;
+  const transport = (message) => ({ error: `${message} (fixture-only: ${privateUrl})` });
+  const http = (status) => ({ status, body: `fixture-only: ${privateUrl}` });
+  const cases = [
+    ['get', transport('invalid peer certificate: Expired'), 'TLS 证书已过期'],
+    ['get', transport('invalid peer certificate: ExpiredContext { time: 320, not_after: 300 }'), 'TLS 证书已过期'],
+    ['get', transport('invalid peer certificate: certificate expired: verification time 320 (UNIX)'), 'TLS 证书已过期'],
+    ['get', transport('InvalidCertificate(Expired)'), 'TLS 证书已过期'],
+    ['get', transport('invalid peer certificate: NotValidYetContext { time: 300, not_before: 320 }'), 'TLS 证书尚未生效'],
+    ['get', transport('invalid peer certificate: certificate not valid yet: verification time 300 (UNIX)'), 'TLS 证书尚未生效'],
+    ['get', transport('invalid peer certificate: NotValidForName'), 'TLS 证书验证失败'],
+    ['get', transport('invalid peer certificate: UnknownIssuer'), 'TLS 证书验证失败'],
+    ['get', transport('invalid peer certificate: ExpiredRevocationList'), 'TLS 证书验证失败'],
+    ['get', transport('the TLS handshake timed out'), 'TLS 握手超时'],
+    ['get', transport('peer is incompatible: Tls12NotOffered'), 'TLS 握手失败'],
+    ['get', transport('received fatal alert: InternalError'), 'TLS 通信失败'],
+    ['get', transport('no IP found for po0.test'), 'DNS 解析失败'],
+    ['get', transport('all DNS requests failed, first error: the TLS handshake timed out'), 'DNS 解析失败'],
+    ['get', transport('Network is unreachable (os error 101)'), '网络或主机不可达，请检查当前网络'],
+    ['get', transport('No route to host (os error 113)'), '网络或主机不可达，请检查当前网络'],
+    ['get', transport('Connection refused (os error 111)'), '连接被拒绝'],
+    ['get', transport('Connection reset by peer (os error 104)'), '连接中断'],
+    ['get', transport('the request timed out'), '请求超时'],
+    ['get', transport('Expired'), '连接失败，原因未明'],
+    ['get', transport(`error for ${privateUrl}/Expired`), '连接失败，原因未明'],
+    ['get', http(503), 'HTTP 503，服务端或网关异常'],
+    ['get', http(403), 'HTTP 403，请检查 token 和白名单权限'],
+    ['post', transport('the request timed out'), '请求超时', true],
+    ['post', http(502), 'HTTP 502，服务端或网关异常', true],
+    ['post', http(401), 'HTTP 401，请检查 token 和白名单权限'],
+    ['post', http(privateUrl), '未收到有效的 HTTP 响应', true],
+  ];
+  for (const [method, fault, reason, pending = false] of cases) {
+    const server = backend({}, { [method]: fault });
+    const result = await run({ argument: arg(), server });
+    const notification = result.notifications[0];
+    const methods = server.requests.map((request) => request.split(' ')[0]).join(',');
+    const title = pending ? 'Po0 自动加白待核验' : 'Po0 自动加白失败';
+    const suffix = method === 'get' ? '本次未写入。' : pending ? '下次查询时核验写入结果。' : '';
+    const output = JSON.stringify(result);
+    check(
+      `${method.toUpperCase()} ${reason}`,
+      methods === (method === 'get' ? 'get' : 'get,post') &&
+        server.state.whitelist.length === 0 &&
+        result.notifications.length === 1 && notification.title === title &&
+        notification.body.includes(reason) && notification.body.endsWith(suffix) &&
+        ![TOKEN, ENDPOINT, 'fixture-only'].some((privateText) => output.includes(privateText)),
+      { methods, result },
+    );
+  }
+}
+
+console.log('21) 同类查询故障的原始详情变化 → 仍按安全提示去重');
+{
+  const faults = { get: { error: 'no IP found for first.test' } };
+  const server = backend({}, faults);
+  const store = {};
+  const first = await run({ argument: arg(), server, store });
+  faults.get.error = 'all DNS requests failed, first error: dns exchange timed out';
+  const second = await run({ argument: arg(), server, store });
+  check('两次只查询，横幅仅显示一次', first.notifications.length === 1 &&
+    second.notifications.length === 0 && server.requests.length === 2 &&
+    server.requests.every((request) => request.startsWith('get ')));
+}
+
+console.log('22) 写入已生效但响应超时 → 下次触发先查询，避免重复写入');
+{
+  const server = backend();
+  const handle = server.handle;
+  server.handle = (method, url) => {
+    const answer = handle(method, url);
+    return method === 'post' ? { error: 'the request timed out' } : answer;
+  };
+  const first = await run({ argument: arg(), server });
+  const second = await run({ argument: arg(), server, store: first.store });
+  check('先提示待核验，下次查询发现已加白', first.notifications[0]?.title === 'Po0 自动加白待核验' &&
+    second.notifications.length === 0 && server.state.whitelist.length === 1 &&
+    server.requests.map((request) => request.split(' ')[0]).join(',') === 'get,post,get');
+}
+
+console.log('23) 写入返回 429 → 沿用限流提示，下次触发仍在退避');
+{
+  const server = backend({}, { post: { status: 429, headers: { 'retry-after': '60' } } });
+  const first = await run({ argument: arg(), server });
+  const second = await run({ argument: arg(), server, store: first.store });
+  check('提示平台限流，两次运行合计一查一写', first.notifications[0]?.body === '平台限流，稍后自动重试' &&
+    second.notifications.length === 0 &&
+    server.requests.map((request) => request.split(' ')[0]).join(',') === 'get,post');
+}
+
 console.log('');
 if (failures === 0) {
-  console.log('全部通过：19 组场景，未访问网络，未写入任何真实白名单。');
+  console.log('全部场景通过，未访问网络，未写入任何真实白名单。');
 } else {
   console.log(`${failures} 项失败`);
   process.exitCode = 1;

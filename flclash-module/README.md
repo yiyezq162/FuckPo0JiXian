@@ -12,7 +12,7 @@
 - `po0-whitelist.remote.sgmodule` — 单文件版，脚本走 jsDelivr，**一键导入用这个**
 - `po0-whitelist.sgmodule` — 离线版，脚本靠「附件」挂上去
 - `po0-whitelist.js` — 脚本
-- `harness.mjs` — 19 组离线场景（假的 `$httpClient` + 假的 Po0 后端），不访问网络
+- `harness.mjs` — 离线验证加白、故障提示和退避（假的 `$httpClient` + 假的 Po0 后端）
 
 ```bash
 node flclash-module/harness.mjs
@@ -75,6 +75,12 @@ cron / event 照样跑。不打开这个开关，模块脚本根本不会运行�
 | `429` | 按 `Retry-After` 退避（最长 6 小时），退避期内一个请求都不发 |
 | 写入返回的快照里没生效 | 通知「未生效」，不谎报成功 |
 | `dry: true` | 只查询，报告「本应写入什么」，不 POST |
+
+### 故障提示
+
+模块根据 FlClash RS 的请求结果，在前台横幅提示证书、TLS、DNS、连接和超时问题。HTTP 5xx 保留状态码，提示服务端或网关异常。HTTP 401/403 提醒检查 token 和白名单权限。故障文案只显示归类后的中文提示和 HTTP 状态码，省略错误原文和请求地址。
+
+查询失败时，本次不写入。写入遇到传输异常或 HTTP 5xx 时，横幅提示下次触发时先查询核验结果。脚本只依据这次请求的错误判断，无法检查系统联网状态或发送 ICMP ping。
 
 ## 网络变化能侦测到什么程度
 

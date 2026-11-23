@@ -89,6 +89,62 @@ function notify(state, title, body) {
   $notification.post(title, '', body);
 }
 
+/** Concord 将拨号和 rustls 错误直接交给脚本。原文可能带完整请求地址，只返回固定文案。 */
+function requestErrorMessage(error) {
+  var text = String(error).trim().replace(/^Error:\s*/i, '');
+  var certificate = /^(?:invalid peer certificate:\s*|InvalidCertificate\()/i.exec(text);
+  if (certificate) {
+    var reason = text.slice(certificate[0].length);
+    if (/^(?:Expired(?:Context)?\b|certificate expired:)/i.test(reason)) {
+      return 'TLS 证书已过期';
+    }
+    if (/^(?:NotValidYet(?:Context)?\b|certificate not valid yet:)/i.test(reason)) {
+      return 'TLS 证书尚未生效';
+    }
+    return 'TLS 证书验证失败';
+  }
+  if (/^(?:certificate verification failed|certificate verify failed|peer sent no certificates)\b/i.test(text)) {
+    return 'TLS 证书验证失败';
+  }
+  if (/^(?:the )?TLS handshake timed out\b/i.test(text)) {
+    return 'TLS 握手超时';
+  }
+  if (/^(?:TLS handshake (?:failed|eof)\b|received unexpected handshake message:|peer is incompatible:|handshake not complete\b)/i.test(text)) {
+    return 'TLS 握手失败';
+  }
+  if (/^(?:received fatal alert:|received corrupt message of type\b|peer misbehaved:)/i.test(text)) {
+    return 'TLS 通信失败';
+  }
+  // Concord 的 DNS 错误也可能包含上游超时或 TLS 错误，按 DNS 失败报告。
+  if (/^(?:no IP found for |all DNS requests failed\b|DNS exchange timed out\b)/i.test(text)) {
+    return 'DNS 解析失败';
+  }
+  if (/^(?:network is unreachable|host is unreachable|no route to host)\b/i.test(text)) {
+    return '网络或主机不可达，请检查当前网络';
+  }
+  if (/^(?:connection refused\b|connection rejected by )/i.test(text)) {
+    return '连接被拒绝';
+  }
+  if (/^(?:connection (?:reset|aborted|closed before message completed)|broken pipe)\b/i.test(text)) {
+    return '连接中断';
+  }
+  if (/^(?:the request timed out|connection timed out|operation timed out|timed out)\b/i.test(text)) {
+    return '请求超时';
+  }
+  return '连接失败，原因未明';
+}
+
+function httpErrorMessage(status) {
+  var message = 'HTTP ' + status;
+  if (status >= 500) {
+    return message + '，服务端或网关异常';
+  }
+  if (status === 401 || status === 403) {
+    return message + '，请检查 token 和白名单权限';
+  }
+  return message;
+}
+
 function request(method, url, callback) {
   var options = {
     url: url,
@@ -98,10 +154,14 @@ function request(method, url, callback) {
   };
   $httpClient[method](options, function (error, response, body) {
     if (error) {
-      callback(String(error), 0, '', null);
+      callback(requestErrorMessage(error), 0, '', null);
       return;
     }
     var status = response && (response.status || response.statusCode) || 0;
+    if (typeof status !== 'number' || status < 100 || status > 599 || status % 1 !== 0) {
+      callback('未收到有效的 HTTP 响应', 0, '', null);
+      return;
+    }
     callback(null, status, body || '', (response && response.headers) || {});
   });
 }
@@ -195,7 +255,7 @@ function main() {
   var base = config.endpoint + '/api/firewall/' + config.token;
   request('get', base, function (error, status, body, headers) {
     if (error) {
-      notify(state, 'Po0 自动加白失败', '查询失败：' + error);
+      notify(state, 'Po0 自动加白失败', '查询失败，' + error + '。本次未写入。');
       saveState(state);
       return finish();
     }
@@ -206,7 +266,7 @@ function main() {
       return finish();
     }
     if (status !== 200) {
-      notify(state, 'Po0 自动加白失败', '查询返回 HTTP ' + status);
+      notify(state, 'Po0 自动加白失败', '查询返回 ' + httpErrorMessage(status) + '。本次未写入。');
       saveState(state);
       return finish();
     }
@@ -269,8 +329,9 @@ function main() {
 
     var target = base + (config.slot === null ? '/add' : '/add?slot=' + config.slot);
     request('post', target, function (postError, postStatus, postBody, postHeaders) {
-      if (postError) {
-        notify(state, 'Po0 自动加白失败', '写入失败：' + postError);
+      if (postError || postStatus >= 500) {
+        var problem = postError ? '写入请求异常，' + postError : '写入返回 ' + httpErrorMessage(postStatus);
+        notify(state, 'Po0 自动加白待核验', problem + '。下次查询时核验写入结果。');
         saveState(state);
         return finish();
       }
@@ -281,7 +342,7 @@ function main() {
         return finish();
       }
       if (postStatus !== 200) {
-        notify(state, 'Po0 自动加白失败', '写入返回 HTTP ' + postStatus);
+        notify(state, 'Po0 自动加白失败', '写入返回 ' + httpErrorMessage(postStatus));
         saveState(state);
         return finish();
       }
